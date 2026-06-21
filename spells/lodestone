@@ -4,7 +4,7 @@
 case "${1-}" in
 --help|--usage|-h|'')
   cat <<'USAGE'
-Usage: lodestone <render|manifest|verify> FILE
+Usage: lodestone <render|render-md|manifest|verify> FILE
 
 Render .stone.html files with YAML frontmatter and HTML bodies.
 USAGE
@@ -29,7 +29,7 @@ source_file=${2-}
 }
 
 case "$action" in
-render|manifest|verify)
+render|render-md|manifest|verify)
   "$repo_root/scripts/lodestone-cargo" run --quiet --manifest-path "$repo_root/Cargo.toml" -- "$action" "$source_file"
   ;;
 *)

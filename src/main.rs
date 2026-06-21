@@ -6,6 +6,7 @@ use std::process;
 #[derive(Clone, Debug)]
 struct StonePage {
     frontmatter: BTreeMap<String, String>,
+    raw_frontmatter: Option<String>,
     body: String,
 }
 
@@ -38,6 +39,9 @@ fn main() {
         "render" => {
             print!("{}", render_page(&page));
         }
+        "render-md" => {
+            print!("{}", render_markdown_page(&page));
+        }
         "manifest" => {
             println!("{}", manifest_json(&source_path, &page));
         }
@@ -59,7 +63,7 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("Usage: lodestone <render|manifest|verify> FILE");
+    println!("Usage: lodestone <render|render-md|manifest|verify> FILE");
     println!();
     println!("Render .stone.html files with YAML frontmatter and HTML bodies.");
 }
@@ -69,6 +73,7 @@ fn parse_stone_page(source: &str) -> Result<StonePage, String> {
     if !source.starts_with("---\n") {
         return Ok(StonePage {
             frontmatter,
+            raw_frontmatter: None,
             body: source.to_string(),
         });
     }
@@ -97,6 +102,7 @@ fn parse_stone_page(source: &str) -> Result<StonePage, String> {
     }
     Ok(StonePage {
         frontmatter,
+        raw_frontmatter: Some(raw_frontmatter.to_string()),
         body: body.to_string(),
     })
 }
@@ -138,6 +144,17 @@ fn render_page(page: &StonePage) -> String {
     html = expand_nostr_sync_pills(&html, page);
     html = expand_lode_scripts(&html);
     html
+}
+
+fn render_markdown_page(page: &StonePage) -> String {
+    let mut out = String::new();
+    if let Some(raw_frontmatter) = &page.raw_frontmatter {
+        out.push_str("---\n");
+        out.push_str(raw_frontmatter);
+        out.push_str("\n---\n\n");
+    }
+    out.push_str(&render_page(page));
+    out
 }
 
 fn interpolate(input: &str, frontmatter: &BTreeMap<String, String>) -> String {

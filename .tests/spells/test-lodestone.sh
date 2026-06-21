@@ -23,6 +23,7 @@ hydrate: /static/test.js
 EOF
 
 "$repo_root/spells/lodestone" render "$source_file" > "$tmpdir/page.html"
+"$repo_root/spells/lodestone" render-md "$source_file" > "$tmpdir/page.md"
 
 grep -F 'data-lodestone-root="page"' "$tmpdir/page.html" >/dev/null || {
   printf '%s\n' "missing lodestone root" >&2
@@ -42,6 +43,10 @@ grep -F 'defer src="/static/test.js"' "$tmpdir/page.html" >/dev/null || {
 }
 
 "$repo_root/spells/lodestone" verify "$source_file" >/dev/null
+"$repo_root/spells/lodestone" render-md "$source_file" | grep -F -- '---' >/dev/null || {
+  printf '%s\n' "missing markdown frontmatter" >&2
+  exit 1
+}
 "$repo_root/spells/lodestone" manifest "$source_file" | grep -F '"title":"Test Page"' >/dev/null || {
   printf '%s\n' "missing manifest title" >&2
   exit 1
