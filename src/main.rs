@@ -160,6 +160,8 @@ fn render_markdown_page(page: &StonePage) -> String {
 fn interpolate(input: &str, frontmatter: &BTreeMap<String, String>) -> String {
     let mut output = input.to_string();
     for (key, value) in frontmatter {
+        output = output.replace(&format!("{{@html page.{key}}}"), value);
+        output = output.replace(&format!("{{@html page.{key} }}"), value);
         let escaped = html_escape(value);
         output = output.replace(&format!("{{{{ page.{key} }}}}"), &escaped);
         output = output.replace(&format!("{{{{page.{key}}}}}"), &escaped);
@@ -332,5 +334,14 @@ hydrate: /static/test.js
         let page = parse_stone_page("---\ntitle: \"<Bad>\"\n---\n<h1>{{ page.title }}</h1>\n")
             .expect("valid page");
         assert!(render_page(&page).contains("&lt;Bad&gt;"));
+    }
+
+    #[test]
+    fn allows_explicit_trusted_html_interpolation() {
+        let page = parse_stone_page(
+            "---\nbody: \"<strong>Ready</strong>\"\n---\n<div>{@html page.body}</div>\n",
+        )
+        .expect("valid page");
+        assert!(render_page(&page).contains("<div><strong>Ready</strong></div>"));
     }
 }

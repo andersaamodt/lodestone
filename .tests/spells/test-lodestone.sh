@@ -13,10 +13,12 @@ cat > "$source_file" <<'EOF'
 title: Test Page
 slug: test-page
 hydrate: /static/test.js
+body: "<strong>Trusted</strong>"
 ---
 
 <lode-page>
   <h1>{{ page.title }}</h1>
+  <div>{@html page.body}</div>
   <nostr-sync-pill slug="{{ page.slug }}"></nostr-sync-pill>
   <lode-script src="{{ page.hydrate }}"></lode-script>
 </lode-page>
@@ -35,6 +37,10 @@ grep -F '<h1>Test Page</h1>' "$tmpdir/page.html" >/dev/null || {
 }
 grep -F 'data-nostr-sync-slug="test-page"' "$tmpdir/page.html" >/dev/null || {
   printf '%s\n' "missing Nostr sync pill" >&2
+  exit 1
+}
+grep -F '<div><strong>Trusted</strong></div>' "$tmpdir/page.html" >/dev/null || {
+  printf '%s\n' "missing trusted HTML interpolation" >&2
   exit 1
 }
 grep -F 'defer src="/static/test.js"' "$tmpdir/page.html" >/dev/null || {

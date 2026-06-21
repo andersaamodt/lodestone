@@ -47,6 +47,7 @@ normalized HTML. If they differ, the page has more than one source of truth.
 - The remaining body is ordinary HTML.
 - Text interpolation uses `{{ page.key }}`.
 - Attribute interpolation uses the same syntax inside attribute values.
+- Trusted server fragments use `{@html page.key}`.
 - Unknown custom elements pass through unchanged.
 - Built-in custom elements expand to ordinary HTML with stable hydrate metadata.
 
