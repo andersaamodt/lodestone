@@ -26,6 +26,7 @@ EOF
 
 "$repo_root/spells/lodestone" render "$source_file" > "$tmpdir/page.html"
 "$repo_root/spells/lodestone" render-md "$source_file" > "$tmpdir/page.md"
+"$repo_root/spells/lodestone" render "$source_file" --set title=Override > "$tmpdir/override.html"
 
 grep -F 'data-lodestone-root="page"' "$tmpdir/page.html" >/dev/null || {
   printf '%s\n' "missing lodestone root" >&2
@@ -33,6 +34,10 @@ grep -F 'data-lodestone-root="page"' "$tmpdir/page.html" >/dev/null || {
 }
 grep -F '<h1>Test Page</h1>' "$tmpdir/page.html" >/dev/null || {
   printf '%s\n' "missing interpolated title" >&2
+  exit 1
+}
+grep -F '<h1>Override</h1>' "$tmpdir/override.html" >/dev/null || {
+  printf '%s\n' "missing CLI override title" >&2
   exit 1
 }
 grep -F 'data-nostr-sync-slug="test-page"' "$tmpdir/page.html" >/dev/null || {

@@ -30,7 +30,8 @@ source_file=${2-}
 
 case "$action" in
 render|render-md|manifest|verify)
-  "$repo_root/scripts/lodestone-cargo" run --quiet --manifest-path "$repo_root/Cargo.toml" -- "$action" "$source_file"
+  shift 2
+  "$repo_root/scripts/lodestone-cargo" run --quiet --manifest-path "$repo_root/Cargo.toml" -- "$action" "$source_file" "$@"
   ;;
 *)
   printf '%s\n' "lodestone: unknown action: $action" >&2

@@ -30,6 +30,7 @@ hydrate: /static/blog-page.js
 ```sh
 spells/lodestone render source.stone.html > page.html
 spells/lodestone render-md source.stone.html > page.md
+spells/lodestone render-md source.stone.html --set title=Blog --html-file posts=/tmp/posts.html
 spells/lodestone manifest source.stone.html
 spells/lodestone verify source.stone.html
 ```

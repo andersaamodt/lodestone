@@ -21,6 +21,7 @@ fn main() {
         eprintln!("lodestone: source file is required");
         process::exit(2);
     };
+    let extra_args: Vec<String> = args.collect();
     let source = match fs::read_to_string(&source_path) {
         Ok(source) => source,
         Err(error) => {
@@ -28,13 +29,17 @@ fn main() {
             process::exit(1);
         }
     };
-    let page = match parse_stone_page(&source) {
+    let mut page = match parse_stone_page(&source) {
         Ok(page) => page,
         Err(error) => {
             eprintln!("lodestone: {error}");
             process::exit(1);
         }
     };
+    if let Err(error) = apply_overrides(&mut page, &extra_args) {
+        eprintln!("lodestone: {error}");
+        process::exit(2);
+    }
     match action.as_str() {
         "render" => {
             print!("{}", render_page(&page));
@@ -63,9 +68,50 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("Usage: lodestone <render|render-md|manifest|verify> FILE");
+    println!("Usage: lodestone <render|render-md|manifest|verify> FILE [--set KEY=VALUE] [--html-file KEY=PATH]");
     println!();
     println!("Render .stone.html files with YAML frontmatter and HTML bodies.");
+}
+
+fn apply_overrides(page: &mut StonePage, args: &[String]) -> Result<(), String> {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--set" => {
+                index += 1;
+                let Some(raw) = args.get(index) else {
+                    return Err("--set requires KEY=VALUE".to_string());
+                };
+                let (key, value) = parse_key_value(raw)?;
+                page.frontmatter.insert(key, value);
+            }
+            "--html-file" => {
+                index += 1;
+                let Some(raw) = args.get(index) else {
+                    return Err("--html-file requires KEY=PATH".to_string());
+                };
+                let (key, path) = parse_key_value(raw)?;
+                let value = fs::read_to_string(&path)
+                    .map_err(|error| format!("could not read html file for {key}: {error}"))?;
+                page.frontmatter.insert(key, value);
+            }
+            unknown => {
+                return Err(format!("unknown option: {unknown}"));
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+fn parse_key_value(raw: &str) -> Result<(String, String), String> {
+    let Some((key, value)) = raw.split_once('=') else {
+        return Err("expected KEY=VALUE".to_string());
+    };
+    if !is_metadata_key(key) {
+        return Err(format!("invalid metadata key: {key}"));
+    }
+    Ok((key.to_string(), value.to_string()))
 }
 
 fn parse_stone_page(source: &str) -> Result<StonePage, String> {
@@ -386,5 +432,17 @@ hydrate: /static/test.js
             .expect("valid page");
         let html = render_page(&page);
         assert!(html.contains("<a href=\"/hello\">/hello</a>"));
+    }
+
+    #[test]
+    fn applies_cli_style_overrides() {
+        let mut page =
+            parse_stone_page("---\ntitle: Old\n---\n<h1>{title}</h1>\n").expect("valid page");
+        apply_overrides(
+            &mut page,
+            &[String::from("--set"), String::from("title=New")],
+        )
+        .expect("override");
+        assert!(render_page(&page).contains("<h1>New</h1>"));
     }
 }
