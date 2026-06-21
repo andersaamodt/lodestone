@@ -1,0 +1,39 @@
+#!/bin/sh
+# Render lodestone YAML+HTML pages.
+
+case "${1-}" in
+--help|--usage|-h|'')
+  cat <<'USAGE'
+Usage: lodestone <render|manifest|verify> FILE
+
+Render .stone.html files with YAML frontmatter and HTML bodies.
+USAGE
+  exit 0
+  ;;
+esac
+
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+action=${1-}
+source_file=${2-}
+
+[ -n "$source_file" ] || {
+  printf '%s\n' "lodestone: source file is required" >&2
+  exit 2
+}
+[ -f "$source_file" ] || {
+  printf '%s\n' "lodestone: source file is not readable" >&2
+  exit 1
+}
+
+case "$action" in
+render|manifest|verify)
+  "$repo_root/scripts/lodestone-cargo" run --quiet --manifest-path "$repo_root/Cargo.toml" -- "$action" "$source_file"
+  ;;
+*)
+  printf '%s\n' "lodestone: unknown action: $action" >&2
+  exit 2
+  ;;
+esac

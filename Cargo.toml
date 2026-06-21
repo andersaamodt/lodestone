@@ -1,0 +1,10 @@
+[package]
+name = "lodestone"
+version = "0.1.0"
+edition = "2021"
+license = "LicenseRef-OWL-3.1"
+description = "Wizardry YAML+HTML universal web renderer."
+
+[[bin]]
+name = "lodestone"
+path = "src/main.rs"
