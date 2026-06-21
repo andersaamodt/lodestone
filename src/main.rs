@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::process;
@@ -6,6 +6,7 @@ use std::process;
 #[derive(Clone, Debug)]
 struct StonePage {
     frontmatter: BTreeMap<String, String>,
+    override_keys: BTreeSet<String>,
     raw_frontmatter: Option<String>,
     body: String,
 }
@@ -83,6 +84,7 @@ fn apply_overrides(page: &mut StonePage, args: &[String]) -> Result<(), String> 
                     return Err("--set requires KEY=VALUE".to_string());
                 };
                 let (key, value) = parse_key_value(raw)?;
+                page.override_keys.insert(key.clone());
                 page.frontmatter.insert(key, value);
             }
             "--html-file" => {
@@ -119,6 +121,7 @@ fn parse_stone_page(source: &str) -> Result<StonePage, String> {
     if !source.starts_with("---\n") {
         return Ok(StonePage {
             frontmatter,
+            override_keys: BTreeSet::new(),
             raw_frontmatter: None,
             body: source.to_string(),
         });
@@ -148,6 +151,7 @@ fn parse_stone_page(source: &str) -> Result<StonePage, String> {
     }
     Ok(StonePage {
         frontmatter,
+        override_keys: BTreeSet::new(),
         raw_frontmatter: Some(raw_frontmatter.to_string()),
         body: body.to_string(),
     })
@@ -197,11 +201,41 @@ fn render_markdown_page(page: &StonePage) -> String {
     let mut out = String::new();
     if let Some(raw_frontmatter) = &page.raw_frontmatter {
         out.push_str("---\n");
-        out.push_str(raw_frontmatter);
+        out.push_str(&render_frontmatter(page, raw_frontmatter));
         out.push_str("\n---\n\n");
     }
     out.push_str(&render_page(page));
     out
+}
+
+fn render_frontmatter(page: &StonePage, raw_frontmatter: &str) -> String {
+    let mut out = String::new();
+    for line in raw_frontmatter.lines() {
+        let trimmed = line.trim();
+        if let Some((key, _value)) = trimmed.split_once(':') {
+            let key = key.trim();
+            if page.override_keys.contains(key) {
+                out.push_str(key);
+                out.push_str(": ");
+                out.push_str(&yaml_value(
+                    &page.frontmatter.get(key).cloned().unwrap_or_default(),
+                ));
+                out.push('\n');
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.trim_end_matches('\n').to_string()
+}
+
+fn yaml_value(value: &str) -> String {
+    if value.starts_with('[') && value.ends_with(']') {
+        return value.to_string();
+    }
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 fn interpolate(input: &str, frontmatter: &BTreeMap<String, String>) -> String {
@@ -467,5 +501,17 @@ hydrate: /static/test.js
         )
         .expect("override");
         assert!(render_page(&page).contains("<h1>New</h1>"));
+        assert!(render_markdown_page(&page).contains("title: \"New\""));
+    }
+
+    #[test]
+    fn keeps_render_only_values_out_of_frontmatter() {
+        let mut page = parse_stone_page("---\ntitle: Page\n---\n<div>{@html body}</div>\n")
+            .expect("valid page");
+        page.frontmatter
+            .insert(String::from("body"), String::from("<strong>Body</strong>"));
+        let rendered = render_markdown_page(&page);
+        assert!(rendered.contains("<strong>Body</strong>"));
+        assert!(!rendered.contains("body:"));
     }
 }
