@@ -204,7 +204,8 @@ fn render_markdown_page(page: &StonePage) -> String {
         out.push_str(&render_frontmatter(page, raw_frontmatter));
         out.push_str("\n---\n\n");
     }
-    out.push_str(&render_page(page));
+    let rendered_body = render_page(page);
+    out.push_str(rendered_body.trim_start_matches('\n'));
     out
 }
 
