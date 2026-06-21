@@ -227,10 +227,24 @@ fn replace_raw_expression(input: &str, expression: &str, value: &str) -> String 
 }
 
 fn replace_attribute_expression(input: &str, expression: &str, escaped_value: &str) -> String {
-    input.replace(
-        &format!("={{{expression}}}"),
-        &format!("=\"{escaped_value}\""),
-    )
+    let token = format!("={{{expression}}}");
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(index) = rest.find(&token) {
+        output.push_str(&rest[..index]);
+        let after_token = &rest[index + token.len()..];
+        let next = after_token.chars().next();
+        if matches!(next, None | Some(' ' | '\n' | '\r' | '\t' | '/' | '>')) {
+            output.push_str("=\"");
+            output.push_str(escaped_value);
+            output.push('"');
+        } else {
+            output.push_str(&token);
+        }
+        rest = after_token;
+    }
+    output.push_str(rest);
+    output
 }
 
 fn replace_braced_expression(input: &str, expression: &str, escaped_value: &str) -> String {
@@ -432,6 +446,15 @@ hydrate: /static/test.js
             .expect("valid page");
         let html = render_page(&page);
         assert!(html.contains("<a href=\"/hello\">/hello</a>"));
+    }
+
+    #[test]
+    fn preserves_quoted_attribute_text_expressions() {
+        let page = parse_stone_page(
+            "---\nversion: 123\n---\n<script src=\"/app.js?v={version}\"></script>\n",
+        )
+        .expect("valid page");
+        assert!(render_page(&page).contains("src=\"/app.js?v=123\""));
     }
 
     #[test]
