@@ -16,11 +16,12 @@ hydrate: /static/blog-page.js
 ---
 
 <lode-page>
-  <h1>{{ page.title }}</h1>
-  <nostr-sync-pill slug="blog"></nostr-sync-pill>
+  <h1>{title}</h1>
+  <nostr-sync-pill slug="blog" />
   <main>
     HTML stays HTML.
   </main>
+  <lode-script src={hydrate} />
 </lode-page>
 ```
 
@@ -45,9 +46,11 @@ normalized HTML. If they differ, the page has more than one source of truth.
 - A leading `---` frontmatter block contains minimal YAML.
 - Frontmatter supports `key: value` and simple `[a, b, c]` lists.
 - The remaining body is ordinary HTML.
-- Text interpolation uses `{{ page.key }}`.
-- Attribute interpolation uses the same syntax inside attribute values.
-- Trusted server fragments use `{@html page.key}`.
+- Text interpolation uses `{title}` or `{page.title}`.
+- Attribute interpolation uses `href={href}` or `href={page.href}`.
+- Attribute shorthand uses `{slug}`.
+- Trusted server fragments use `{@html body}` or `{@html page.body}`.
+- Legacy `{{ page.key }}` interpolation remains supported for migration.
 - Unknown custom elements pass through unchanged.
 - Built-in custom elements expand to ordinary HTML with stable hydrate metadata.
 

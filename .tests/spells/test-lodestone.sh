@@ -17,10 +17,10 @@ body: "<strong>Trusted</strong>"
 ---
 
 <lode-page>
-  <h1>{{ page.title }}</h1>
-  <div>{@html page.body}</div>
-  <nostr-sync-pill slug="{{ page.slug }}"></nostr-sync-pill>
-  <lode-script src="{{ page.hydrate }}"></lode-script>
+  <h1>{title}</h1>
+  <div>{@html body}</div>
+  <nostr-sync-pill {slug}></nostr-sync-pill>
+  <lode-script src={hydrate}></lode-script>
 </lode-page>
 EOF
 

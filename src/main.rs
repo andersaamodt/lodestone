@@ -139,7 +139,8 @@ fn unquote(value: &str) -> String {
 }
 
 fn render_page(page: &StonePage) -> String {
-    let mut html = interpolate(&page.body, &page.frontmatter);
+    let mut html = expand_attribute_shorthand(&page.body, &page.frontmatter);
+    html = interpolate(&html, &page.frontmatter);
     html = expand_lode_page(&html);
     html = expand_nostr_sync_pills(&html, page);
     html = expand_lode_scripts(&html);
@@ -160,13 +161,36 @@ fn render_markdown_page(page: &StonePage) -> String {
 fn interpolate(input: &str, frontmatter: &BTreeMap<String, String>) -> String {
     let mut output = input.to_string();
     for (key, value) in frontmatter {
-        output = output.replace(&format!("{{@html page.{key}}}"), value);
-        output = output.replace(&format!("{{@html page.{key} }}"), value);
+        output = replace_raw_expression(&output, &format!("page.{key}"), value);
+        output = replace_raw_expression(&output, key, value);
         let escaped = html_escape(value);
+        output = replace_attribute_expression(&output, &format!("page.{key}"), &escaped);
+        output = replace_attribute_expression(&output, key, &escaped);
+        output = replace_braced_expression(&output, &format!("page.{key}"), &escaped);
+        output = replace_braced_expression(&output, key, &escaped);
         output = output.replace(&format!("{{{{ page.{key} }}}}"), &escaped);
         output = output.replace(&format!("{{{{page.{key}}}}}"), &escaped);
     }
     output
+}
+
+fn replace_raw_expression(input: &str, expression: &str, value: &str) -> String {
+    let mut output = input.to_string();
+    output = output.replace(&format!("{{@html {expression}}}"), value);
+    output.replace(&format!("{{@html {expression} }}"), value)
+}
+
+fn replace_attribute_expression(input: &str, expression: &str, escaped_value: &str) -> String {
+    input.replace(
+        &format!("={{{expression}}}"),
+        &format!("=\"{escaped_value}\""),
+    )
+}
+
+fn replace_braced_expression(input: &str, expression: &str, escaped_value: &str) -> String {
+    let mut output = input.to_string();
+    output = output.replace(&format!("{{{expression}}}"), escaped_value);
+    output.replace(&format!("{{ {expression} }}"), escaped_value)
 }
 
 fn expand_lode_page(input: &str) -> String {
@@ -250,6 +274,17 @@ fn attr_value(raw: &str, name: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn expand_attribute_shorthand(input: &str, frontmatter: &BTreeMap<String, String>) -> String {
+    let mut output = input.to_string();
+    for (key, value) in frontmatter {
+        output = output.replace(
+            &format!(" {{{key}}}"),
+            &format!(" {key}=\"{}\"", html_escape(value)),
+        );
+    }
+    output
+}
+
 fn html_escape(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -315,9 +350,9 @@ hydrate: /static/test.js
 ---
 
 <lode-page>
-<h1>{{ page.title }}</h1>
-<nostr-sync-pill slug="{{ page.slug }}"></nostr-sync-pill>
-<lode-script src="{{ page.hydrate }}"></lode-script>
+<h1>{title}</h1>
+<nostr-sync-pill {slug}></nostr-sync-pill>
+<lode-script src={hydrate}></lode-script>
 </lode-page>
 "#,
         )
@@ -339,9 +374,17 @@ hydrate: /static/test.js
     #[test]
     fn allows_explicit_trusted_html_interpolation() {
         let page = parse_stone_page(
-            "---\nbody: \"<strong>Ready</strong>\"\n---\n<div>{@html page.body}</div>\n",
+            "---\nbody: \"<strong>Ready</strong>\"\n---\n<div>{@html body}</div>\n",
         )
         .expect("valid page");
         assert!(render_page(&page).contains("<div><strong>Ready</strong></div>"));
+    }
+
+    #[test]
+    fn supports_svelte_like_attribute_expressions() {
+        let page = parse_stone_page("---\nhref: /hello\n---\n<a href={href}>{href}</a>\n")
+            .expect("valid page");
+        let html = render_page(&page);
+        assert!(html.contains("<a href=\"/hello\">/hello</a>"));
     }
 }
