@@ -5,6 +5,9 @@ edition = "2021"
 license = "LicenseRef-OWL-3.1"
 description = "Wizardry YAML+HTML universal web renderer."
 
+[dependencies]
+serde_json = "1"
+
 [[bin]]
 name = "lodestone"
 path = "src/main.rs"

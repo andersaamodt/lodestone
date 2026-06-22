@@ -3,6 +3,8 @@ use std::env;
 use std::fs;
 use std::process;
 
+use serde_json::Value;
+
 #[derive(Clone, Debug)]
 struct StonePage {
     frontmatter: BTreeMap<String, String>,
@@ -192,6 +194,7 @@ fn render_page(page: &StonePage) -> String {
     let mut html = expand_attribute_shorthand(&page.body, &page.frontmatter);
     html = interpolate(&html, &page.frontmatter);
     html = expand_lode_page(&html);
+    html = expand_lode_blog_post_lists(&html);
     html = expand_nostr_sync_pills(&html, page);
     html = expand_lode_scripts(&html);
     html
@@ -327,6 +330,281 @@ fn expand_lode_scripts(input: &str) -> String {
     })
 }
 
+fn expand_lode_blog_post_lists(input: &str) -> String {
+    expand_custom_element(input, "lode-blog-post-list", |raw| {
+        let posts_json = attr_value(raw, "posts")
+            .map(|value| html_unescape(&value))
+            .unwrap_or_default();
+        render_blog_post_list(&posts_json)
+    })
+}
+
+fn render_blog_post_list(posts_json: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(posts_json) else {
+        return "<p class=\"placeholder\">No posts to show yet.</p>".to_string();
+    };
+    let posts = if let Some(posts) = value.as_array() {
+        posts
+    } else if let Some(posts) = value.get("posts").and_then(Value::as_array) {
+        posts
+    } else {
+        return "<p class=\"placeholder\">No posts to show yet.</p>".to_string();
+    };
+    if posts.is_empty() {
+        return "<p class=\"placeholder\">No posts to show yet.</p>".to_string();
+    }
+    posts.iter().map(render_blog_post_card).collect::<Vec<_>>().join("")
+}
+
+fn render_blog_post_card(post: &Value) -> String {
+    let title = text_field(post, "title");
+    let title = if title.trim().is_empty() {
+        clean_markdown_text(&text_field(post, "summary"))
+    } else {
+        title
+    };
+    let title = if title.trim().is_empty() {
+        "Untitled".to_string()
+    } else {
+        title
+    };
+    let url = first_nonempty_field(post, &["url", "path"]);
+    let url = if url.trim().is_empty() { "#".to_string() } else { url };
+    let post_type = first_nonempty_field(post, &["type"]);
+    let post_type = if post_type.trim().is_empty() {
+        "post".to_string()
+    } else {
+        post_type
+    };
+    let year = first_nonempty_field(post, &["year"]);
+    let year = if year.trim().is_empty() {
+        published_year(post).unwrap_or_else(|| "Unknown".to_string())
+    } else {
+        year
+    };
+    let author = first_nonempty_field(post, &["author"]);
+    let author = if author.trim().is_empty() {
+        "Blog Author".to_string()
+    } else {
+        author
+    };
+    let date = first_nonempty_field(post, &["published_date", "pub_date", "date"]);
+    let date = if date.trim().is_empty() {
+        "Unknown date".to_string()
+    } else {
+        date
+    };
+    let minutes = number_field(post, "reading_minutes").max(1);
+    let comments = number_field(post, "comment_count").max(0);
+    let comments_label = if comments == 1 { "1 comment".to_string() } else { format!("{comments} comments") };
+    let summary = clean_markdown_text(&text_field(post, "summary"));
+    let summary_html = render_post_summary_html(&summary, &url, bool_field(post, "summary_truncated"));
+    let tags_html = post_tags(post)
+        .iter()
+        .map(|tag| {
+            format!(
+                "<button type=\"button\" class=\"tag blog-inline-tag\" data-inline-tag=\"{}\" aria-pressed=\"false\">{}</button>",
+                html_escape(tag),
+                html_escape(tag)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let offsite = if post_type == "link-share" {
+        let link_url = first_nonempty_field(post, &["link_url"]);
+        let link_url = if link_url.trim().is_empty() {
+            first_markdown_href(&summary)
+        } else {
+            link_url
+        };
+        format!(
+            "<div class=\"post-offsite-link-note\"><span class=\"post-offsite-link-kind\">Off-site link</span><span>Linked by {}</span>{}</div>",
+            html_escape(&author),
+            if link_url.trim().is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<a class=\"post-offsite-url\" href=\"{}\" title=\"{}\">{}</a>",
+                    html_escape(&link_url),
+                    html_escape(&link_url),
+                    html_escape(&link_url)
+                )
+            }
+        )
+    } else {
+        String::new()
+    };
+    let classes = if post_type == "link-share" {
+        "post-item blog-post-item is-link-share"
+    } else {
+        "post-item blog-post-item"
+    };
+    format!(
+        "<article class=\"{}\" data-lodestone-component=\"blog-post-card\" data-post-url=\"{}\" data-post-type=\"{}\" data-post-year=\"{}\" data-post-tags=\"{}\"><div class=\"post-head\"><div class=\"post-head-main\"><h2 class=\"post-title\"><a href=\"{}\">{}</a></h2>{}<div class=\"post-head-divider\" aria-hidden=\"true\"></div><div class=\"post-byline post-byline-bottom\"><span class=\"post-author\">{}</span><span class=\"post-reading-inline\">{} min read</span><span class=\"post-date\">{}</span></div></div></div>{}<div class=\"post-card-footer\"><div class=\"tags post-card-meta-tags\"><button type=\"button\" class=\"tag blog-type-pill\" data-inline-filter-group=\"types\" data-inline-filter-value=\"{}\" aria-pressed=\"false\" aria-label=\"Filter by {}\">{}</button><button type=\"button\" class=\"tag blog-year-pill\" data-inline-filter-group=\"years\" data-inline-filter-value=\"{}\" aria-pressed=\"false\" aria-label=\"Filter by {}\">{}</button>{}</div><span class=\"post-card-comments-count\">{}</span></div></article>",
+        classes,
+        html_escape(&url),
+        html_escape(&post_type),
+        html_escape(&year),
+        html_escape(&post_tags(post).join(",")),
+        html_escape(&url),
+        html_escape(&title),
+        offsite,
+        html_escape(&author),
+        minutes,
+        html_escape(&date),
+        summary_html,
+        html_escape(&post_type),
+        html_escape(&format_type(&post_type)),
+        html_escape(&format_type(&post_type)),
+        html_escape(&year),
+        html_escape(&year),
+        html_escape(&year),
+        tags_html,
+        html_escape(&comments_label)
+    )
+}
+
+fn text_field(value: &Value, key: &str) -> String {
+    value.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+}
+
+fn first_nonempty_field(value: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .map(|key| text_field(value, key))
+        .find(|item| !item.trim().is_empty())
+        .unwrap_or_default()
+}
+
+fn number_field(value: &Value, key: &str) -> i64 {
+    value
+        .get(key)
+        .and_then(|item| item.as_i64().or_else(|| item.as_f64().map(|num| num as i64)))
+        .unwrap_or(0)
+}
+
+fn bool_field(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn post_tags(value: &Value) -> Vec<String> {
+    match value.get("tags") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        Some(Value::String(raw)) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn published_year(value: &Value) -> Option<String> {
+    let year = first_nonempty_field(value, &["published_at", "created_at"])
+        .chars()
+        .take(4)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if year.is_empty() {
+        None
+    } else {
+        Some(year)
+    }
+}
+
+fn format_type(value: &str) -> String {
+    match value {
+        "longform" | "post" => "post".to_string(),
+        "link-share" => "link".to_string(),
+        "capture-media" => "capture".to_string(),
+        "upload-media" => "media".to_string(),
+        "audio-note" => "audio".to_string(),
+        "go-live" => "go live".to_string(),
+        other => other.replace(['_', '-'], " "),
+    }
+}
+
+fn clean_markdown_text(value: &str) -> String {
+    value.replace("\\\"", "\"").replace("\\'", "'")
+}
+
+fn render_post_summary_html(summary: &str, url: &str, truncated: bool) -> String {
+    let text = summary.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let read_more = if truncated && !url.trim().is_empty() {
+        format!("<a class=\"post-summary-read-more\" href=\"{}\">Read more...</a>", html_escape(url))
+    } else {
+        String::new()
+    };
+    format!(
+        "<div class=\"post-summary\"><p>{}</p>{}</div>",
+        markdown_inline_fallback(text).replace('\n', "<br>"),
+        read_more
+    )
+}
+
+fn markdown_inline_fallback(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find('[') {
+        let Some(label_end) = rest[start + 1..].find("](") else {
+            break;
+        };
+        let label_end = start + 1 + label_end;
+        let href_start = label_end + 2;
+        let Some(href_end_rel) = rest[href_start..].find(')') else {
+            break;
+        };
+        let href_end = href_start + href_end_rel;
+        out.push_str(&html_escape(&rest[..start]));
+        let label = &rest[start + 1..label_end];
+        let href = safe_markdown_href(&rest[href_start..href_end]);
+        if href.is_empty() {
+            out.push_str(&html_escape(label));
+        } else {
+            out.push_str(&format!("<a href=\"{}\">{}</a>", html_escape(&href), html_escape(label)));
+        }
+        rest = &rest[href_end + 1..];
+    }
+    out.push_str(&html_escape(rest));
+    out
+}
+
+fn safe_markdown_href(raw: &str) -> String {
+    let href = raw.trim().trim_matches(['<', '>']);
+    if href.is_empty() {
+        return String::new();
+    }
+    let lower = href.to_ascii_lowercase();
+    if lower.starts_with("http:") || lower.starts_with("https:") || lower.starts_with("mailto:") || href.starts_with('/') || href.starts_with('#') {
+        return href.to_string();
+    }
+    if href.contains(':') {
+        return String::new();
+    }
+    href.to_string()
+}
+
+fn first_markdown_href(value: &str) -> String {
+    let Some(open) = value.find("](") else {
+        return String::new();
+    };
+    let rest = &value[open + 2..];
+    let Some(close) = rest.find(')') else {
+        return String::new();
+    };
+    safe_markdown_href(&rest[..close])
+}
+
 fn expand_custom_element<F>(input: &str, tag: &str, mut render: F) -> String
 where
     F: FnMut(&str) -> String,
@@ -393,6 +671,14 @@ fn html_escape(raw: &str) -> String {
         }
     }
     out
+}
+
+fn html_unescape(raw: &str) -> String {
+    raw.replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn json_escape(raw: &str) -> String {
@@ -514,5 +800,23 @@ hydrate: /static/test.js
         let rendered = render_markdown_page(&page);
         assert!(rendered.contains("<strong>Body</strong>"));
         assert!(!rendered.contains("body:"));
+    }
+
+    #[test]
+    fn renders_blog_post_list_from_lodestone_data() {
+        let mut page = parse_stone_page(
+            "---\ntitle: Blog\n---\n<lode-blog-post-list posts={posts_json}></lode-blog-post-list>\n",
+        )
+        .expect("valid page");
+        page.frontmatter.insert(
+            String::from("posts_json"),
+            r#"[{"title":"Hello","url":"/posts/hello","type":"longform","year":"2026","tags":["writing"],"summary":"Read [this](/this)","summary_truncated":true,"reading_minutes":2,"author":"Ander","published_date":"June 1, 2026","comment_count":1}]"#.to_string(),
+        );
+        let rendered = render_page(&page);
+        assert!(rendered.contains("data-lodestone-component=\"blog-post-card\""));
+        assert!(rendered.contains("<a href=\"/posts/hello\">Hello</a>"));
+        assert!(rendered.contains("data-post-tags=\"writing\""));
+        assert!(rendered.contains("Read <a href=\"/this\">this</a>"));
+        assert!(rendered.contains("1 comment"));
     }
 }
