@@ -314,7 +314,7 @@ fn expand_nostr_sync_pills(input: &str, page: &StonePage) -> String {
             .or_else(|| page.frontmatter.get("slug").cloned())
             .unwrap_or_else(|| "page".to_string());
         format!(
-            "<span class=\"nostr-sync-pill\" data-lodestone-component=\"nostr-sync-pill\" data-nostr-sync-slug=\"{}\" aria-live=\"polite\">Nostr sync</span>",
+            "<span class=\"page-sync-status-pill status-unknown nostr-sync-pill\" data-lodestone-component=\"nostr-sync-pill\" data-nostr-sync-slug=\"{}\" aria-live=\"polite\">Nostr sync</span>",
             html_escape(&slug)
         )
     })
@@ -800,6 +800,15 @@ hydrate: /static/test.js
         let rendered = render_markdown_page(&page);
         assert!(rendered.contains("<strong>Body</strong>"));
         assert!(!rendered.contains("body:"));
+    }
+
+    #[test]
+    fn renders_nostr_sync_pill_with_shared_status_class() {
+        let page = parse_stone_page("---\nslug: oeuvre\n---\n<nostr-sync-pill slug={slug}></nostr-sync-pill>\n")
+            .expect("valid page");
+        let rendered = render_page(&page);
+        assert!(rendered.contains("page-sync-status-pill status-unknown nostr-sync-pill"));
+        assert!(rendered.contains("data-nostr-sync-slug=\"oeuvre\""));
     }
 
     #[test]
