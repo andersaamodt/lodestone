@@ -1,9 +1,8 @@
 #!/bin/sh
 # Test lodestone rendering.
 
-set -eu
-
 PATH=/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}
+set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd -P)
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/lodestone-test.XXXXXX")
@@ -62,6 +61,46 @@ grep -F 'defer src="/static/test.js"' "$tmpdir/page.html" >/dev/null || {
 }
 "$repo_root/spells/lodestone" manifest "$source_file" | grep -F '"title":"Test Page"' >/dev/null || {
   printf '%s\n' "missing manifest title" >&2
+  exit 1
+}
+
+space_dir="$tmpdir/path with spaces"
+mkdir -p "$space_dir"
+space_source="$space_dir/-option-like page.stone.html"
+fragment_file="$space_dir/fragment.html"
+cat > "$space_source" <<'EOF'
+---
+title: Space Page
+---
+<lode-page><h1>{title}</h1><div>{@html body}</div></lode-page>
+EOF
+printf '%s\n' '<em>Fragment</em>' > "$fragment_file"
+
+"$repo_root/spells/lodestone" render "$space_source" --html-file body="$fragment_file" > "$tmpdir/space-page.html"
+grep -F '<h1>Space Page</h1>' "$tmpdir/space-page.html" >/dev/null || {
+  printf '%s\n' "failed to render path with spaces" >&2
+  exit 1
+}
+grep -F '<div><em>Fragment</em>' "$tmpdir/space-page.html" >/dev/null || {
+  printf '%s\n' "failed to include html-file fragment" >&2
+  exit 1
+}
+
+if "$repo_root/spells/lodestone" render "$source_file" --set 'bad/key=value' >"$tmpdir/bad-key.out" 2>"$tmpdir/bad-key.err"; then
+  printf '%s\n' "invalid override key unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -F 'invalid metadata key' "$tmpdir/bad-key.err" >/dev/null || {
+  printf '%s\n' "invalid override key error was not descriptive" >&2
+  exit 1
+}
+
+if "$repo_root/spells/lodestone" render >"$tmpdir/missing-source.out" 2>"$tmpdir/missing-source.err"; then
+  printf '%s\n' "missing source unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -F 'source file is required' "$tmpdir/missing-source.err" >/dev/null || {
+  printf '%s\n' "missing source error was not descriptive" >&2
   exit 1
 }
 

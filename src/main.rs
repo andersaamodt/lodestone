@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Clone, Debug)]
 struct StonePage {
@@ -120,23 +120,24 @@ fn parse_key_value(raw: &str) -> Result<(String, String), String> {
 
 fn parse_stone_page(source: &str) -> Result<StonePage, String> {
     let mut frontmatter = BTreeMap::new();
-    if !source.starts_with("---\n") {
+    let Some(rest) = source
+        .strip_prefix("---\n")
+        .or_else(|| source.strip_prefix("---\r\n"))
+    else {
         return Ok(StonePage {
             frontmatter,
             override_keys: BTreeSet::new(),
             raw_frontmatter: None,
             body: source.to_string(),
         });
-    }
-    let rest = &source[4..];
-    let Some(end_index) = rest.find("\n---") else {
+    };
+    let Some((raw_frontmatter, after_frontmatter)) = split_frontmatter(rest) else {
         return Err("frontmatter starts but never closes".to_string());
     };
-    let raw_frontmatter = &rest[..end_index];
-    let mut body = &rest[end_index + 4..];
-    if body.starts_with('\n') {
-        body = &body[1..];
-    }
+    let body = after_frontmatter
+        .strip_prefix("\r\n")
+        .or_else(|| after_frontmatter.strip_prefix('\n'))
+        .unwrap_or(after_frontmatter);
     for (line_index, line) in raw_frontmatter.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -157,6 +158,21 @@ fn parse_stone_page(source: &str) -> Result<StonePage, String> {
         raw_frontmatter: Some(raw_frontmatter.to_string()),
         body: body.to_string(),
     })
+}
+
+fn split_frontmatter(rest: &str) -> Option<(&str, &str)> {
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed == "---" {
+            return Some((&rest[..offset], &rest[offset + line.len()..]));
+        }
+        offset += line.len();
+    }
+    if rest[offset..].trim_end_matches('\r') == "---" {
+        return Some((&rest[..offset], ""));
+    }
+    None
 }
 
 fn is_metadata_key(value: &str) -> bool {
@@ -297,6 +313,11 @@ fn expand_lode_page(input: &str) -> String {
     while let Some(start) = rest.find("<lode-page") {
         output.push_str(&rest[..start]);
         let after_start = &rest[start..];
+        if !has_tag_name_boundary(after_start, "lode-page") {
+            output.push_str("<lode-page");
+            rest = &after_start["<lode-page".len()..];
+            continue;
+        }
         let Some(end) = after_start.find('>') else {
             output.push_str(after_start);
             return output;
@@ -584,7 +605,7 @@ fn markdown_inline_fallback(value: &str) -> String {
         };
         let label_end = start + 1 + label_end;
         let href_start = label_end + 2;
-        let Some(href_end_rel) = rest[href_start..].find(')') else {
+        let Some(href_end_rel) = markdown_href_end(&rest[href_start..]) else {
             break;
         };
         let href_end = href_start + href_end_rel;
@@ -611,11 +632,14 @@ fn safe_markdown_href(raw: &str) -> String {
     if href.is_empty() {
         return String::new();
     }
+    if href.starts_with("//") {
+        return String::new();
+    }
     let lower = href.to_ascii_lowercase();
     if lower.starts_with("http:")
         || lower.starts_with("https:")
         || lower.starts_with("mailto:")
-        || href.starts_with('/')
+        || (href.starts_with('/') && !href.starts_with("//"))
         || href.starts_with('#')
     {
         return href.to_string();
@@ -631,10 +655,23 @@ fn first_markdown_href(value: &str) -> String {
         return String::new();
     };
     let rest = &value[open + 2..];
-    let Some(close) = rest.find(')') else {
+    let Some(close) = markdown_href_end(rest) else {
         return String::new();
     };
     safe_markdown_href(&rest[..close])
+}
+
+fn markdown_href_end(raw: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, ch) in raw.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(index),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 fn expand_custom_element<F>(input: &str, tag: &str, mut render: F) -> String
@@ -648,6 +685,11 @@ where
     while let Some(start) = rest.find(&open_prefix) {
         output.push_str(&rest[..start]);
         let after_start = &rest[start..];
+        if !has_tag_name_boundary(after_start, tag) {
+            output.push_str(&open_prefix);
+            rest = &after_start[open_prefix.len()..];
+            continue;
+        }
         let Some(open_end) = after_start.find('>') else {
             output.push_str(after_start);
             return output;
@@ -669,6 +711,12 @@ where
     }
     output.push_str(rest);
     output
+}
+
+fn has_tag_name_boundary(raw: &str, tag: &str) -> bool {
+    raw.as_bytes()
+        .get(tag.len() + 1)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t' | b'/' | b'>'))
 }
 
 fn attr_value(raw: &str, name: &str) -> Option<String> {
@@ -713,36 +761,12 @@ fn html_unescape(raw: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn json_escape(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
 fn manifest_json(source_path: &str, page: &StonePage) -> String {
-    let mut out = format!("{{\"source\":\"{}\",\"page\":{{", json_escape(source_path));
-    for (index, (key, value)) in page.frontmatter.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('"');
-        out.push_str(&json_escape(key));
-        out.push_str("\":\"");
-        out.push_str(&json_escape(value));
-        out.push('"');
-    }
-    out.push_str("}}");
-    out.push('}');
-    out
+    json!({
+        "source": source_path,
+        "page": &page.frontmatter,
+    })
+    .to_string()
 }
 
 fn normalize_html(input: &str) -> String {
@@ -861,5 +885,85 @@ hydrate: /static/test.js
         assert!(rendered.contains("data-post-tags=\"writing\""));
         assert!(rendered.contains("Read <a href=\"/this\">this</a>"));
         assert!(rendered.contains("1 comment"));
+    }
+
+    #[test]
+    fn frontmatter_closes_only_on_delimiter_line() {
+        let page = parse_stone_page(
+            "---\ntitle: Dash Page\n---not-a-delimiter: true\n---\n<p>Body with --- text</p>\n",
+        )
+        .expect("valid page");
+
+        assert_eq!(
+            page.frontmatter.get("title").map(String::as_str),
+            Some("Dash Page")
+        );
+        assert_eq!(
+            page.frontmatter
+                .get("---not-a-delimiter")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert!(page.body.contains("Body with --- text"));
+    }
+
+    #[test]
+    fn supports_crlf_frontmatter_delimiters() {
+        let page = parse_stone_page("---\r\ntitle: CRLF\r\n---\r\n<h1>{title}</h1>\r\n")
+            .expect("valid page");
+
+        assert_eq!(
+            page.frontmatter.get("title").map(String::as_str),
+            Some("CRLF")
+        );
+        assert!(render_page(&page).contains("<h1>CRLF</h1>"));
+    }
+
+    #[test]
+    fn leaves_similar_custom_element_names_untouched() {
+        let page = parse_stone_page(
+            "<lode-pagelet><nostr-sync-pillow slug=\"x\"></nostr-sync-pillow><lode-scripture src=\"/x.js\"></lode-scripture></lode-pagelet>",
+        )
+        .expect("valid page");
+        let rendered = render_page(&page);
+
+        assert!(rendered.contains("<lode-pagelet>"));
+        assert!(rendered.contains("<nostr-sync-pillow slug=\"x\"></nostr-sync-pillow>"));
+        assert!(rendered.contains("<lode-scripture src=\"/x.js\"></lode-scripture>"));
+        assert!(!rendered.contains("data-lodestone-component=\"nostr-sync-pill\""));
+    }
+
+    #[test]
+    fn strips_unsafe_markdown_links_without_losing_label_text() {
+        assert_eq!(
+            markdown_inline_fallback("See [bad](javascript:alert(1)) and [also](//example.test)."),
+            "See bad and also."
+        );
+    }
+
+    #[test]
+    fn manifest_is_structured_json_with_escaped_values() {
+        let page =
+            parse_stone_page("---\ntitle: \"A \\\"quoted\\\" page\"\nsummary: line one\n---\n")
+                .expect("valid page");
+        let manifest: Value =
+            serde_json::from_str(&manifest_json("odd path/\"page\".stone.html", &page))
+                .expect("valid json");
+
+        assert_eq!(manifest["source"], "odd path/\"page\".stone.html");
+        assert_eq!(manifest["page"]["title"], "A \\\"quoted\\\" page");
+        assert_eq!(manifest["page"]["summary"], "line one");
+    }
+
+    #[test]
+    fn rejects_invalid_metadata_keys_in_overrides() {
+        let mut page = parse_stone_page("<h1>{title}</h1>").expect("valid page");
+        let error = apply_overrides(
+            &mut page,
+            &[String::from("--set"), String::from("bad/key=value")],
+        )
+        .expect_err("invalid key rejected");
+
+        assert!(error.contains("invalid metadata key"));
     }
 }
