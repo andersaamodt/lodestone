@@ -3,6 +3,8 @@
 
 set -eu
 
+PATH=/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}
+
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd -P)
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/lodestone-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM

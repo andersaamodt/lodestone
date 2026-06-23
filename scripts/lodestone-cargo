@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+PATH=/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}
+
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 . "$script_dir/lodestone-paths.sh"
 

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Render lodestone YAML+HTML pages.
 
+PATH=/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}
+
 case "${1-}" in
 --help|--usage|-h|'')
   cat <<'USAGE'

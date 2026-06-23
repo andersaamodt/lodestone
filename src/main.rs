@@ -353,7 +353,11 @@ fn render_blog_post_list(posts_json: &str) -> String {
     if posts.is_empty() {
         return "<p class=\"placeholder\">No posts to show yet.</p>".to_string();
     }
-    posts.iter().map(render_blog_post_card).collect::<Vec<_>>().join("")
+    posts
+        .iter()
+        .map(render_blog_post_card)
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn render_blog_post_card(post: &Value) -> String {
@@ -369,7 +373,11 @@ fn render_blog_post_card(post: &Value) -> String {
         title
     };
     let url = first_nonempty_field(post, &["url", "path"]);
-    let url = if url.trim().is_empty() { "#".to_string() } else { url };
+    let url = if url.trim().is_empty() {
+        "#".to_string()
+    } else {
+        url
+    };
     let post_type = first_nonempty_field(post, &["type"]);
     let post_type = if post_type.trim().is_empty() {
         "post".to_string()
@@ -396,9 +404,14 @@ fn render_blog_post_card(post: &Value) -> String {
     };
     let minutes = number_field(post, "reading_minutes").max(1);
     let comments = number_field(post, "comment_count").max(0);
-    let comments_label = if comments == 1 { "1 comment".to_string() } else { format!("{comments} comments") };
+    let comments_label = if comments == 1 {
+        "1 comment".to_string()
+    } else {
+        format!("{comments} comments")
+    };
     let summary = clean_markdown_text(&text_field(post, "summary"));
-    let summary_html = render_post_summary_html(&summary, &url, bool_field(post, "summary_truncated"));
+    let summary_html =
+        render_post_summary_html(&summary, &url, bool_field(post, "summary_truncated"));
     let tags_html = post_tags(post)
         .iter()
         .map(|tag| {
@@ -465,7 +478,11 @@ fn render_blog_post_card(post: &Value) -> String {
 }
 
 fn text_field(value: &Value, key: &str) -> String {
-    value.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn first_nonempty_field(value: &Value, keys: &[&str]) -> String {
@@ -478,7 +495,10 @@ fn first_nonempty_field(value: &Value, keys: &[&str]) -> String {
 fn number_field(value: &Value, key: &str) -> i64 {
     value
         .get(key)
-        .and_then(|item| item.as_i64().or_else(|| item.as_f64().map(|num| num as i64)))
+        .and_then(|item| {
+            item.as_i64()
+                .or_else(|| item.as_f64().map(|num| num as i64))
+        })
         .unwrap_or(0)
 }
 
@@ -541,7 +561,10 @@ fn render_post_summary_html(summary: &str, url: &str, truncated: bool) -> String
         return String::new();
     }
     let read_more = if truncated && !url.trim().is_empty() {
-        format!("<a class=\"post-summary-read-more\" href=\"{}\">Read more...</a>", html_escape(url))
+        format!(
+            "<a class=\"post-summary-read-more\" href=\"{}\">Read more...</a>",
+            html_escape(url)
+        )
     } else {
         String::new()
     };
@@ -571,7 +594,11 @@ fn markdown_inline_fallback(value: &str) -> String {
         if href.is_empty() {
             out.push_str(&html_escape(label));
         } else {
-            out.push_str(&format!("<a href=\"{}\">{}</a>", html_escape(&href), html_escape(label)));
+            out.push_str(&format!(
+                "<a href=\"{}\">{}</a>",
+                html_escape(&href),
+                html_escape(label)
+            ));
         }
         rest = &rest[href_end + 1..];
     }
@@ -585,7 +612,12 @@ fn safe_markdown_href(raw: &str) -> String {
         return String::new();
     }
     let lower = href.to_ascii_lowercase();
-    if lower.starts_with("http:") || lower.starts_with("https:") || lower.starts_with("mailto:") || href.starts_with('/') || href.starts_with('#') {
+    if lower.starts_with("http:")
+        || lower.starts_with("https:")
+        || lower.starts_with("mailto:")
+        || href.starts_with('/')
+        || href.starts_with('#')
+    {
         return href.to_string();
     }
     if href.contains(':') {
@@ -804,8 +836,10 @@ hydrate: /static/test.js
 
     #[test]
     fn renders_nostr_sync_pill_with_shared_status_class() {
-        let page = parse_stone_page("---\nslug: oeuvre\n---\n<nostr-sync-pill slug={slug}></nostr-sync-pill>\n")
-            .expect("valid page");
+        let page = parse_stone_page(
+            "---\nslug: oeuvre\n---\n<nostr-sync-pill slug={slug}></nostr-sync-pill>\n",
+        )
+        .expect("valid page");
         let rendered = render_page(&page);
         assert!(rendered.contains("page-sync-status-pill status-unknown nostr-sync-pill"));
         assert!(rendered.contains("data-nostr-sync-slug=\"oeuvre\""));
