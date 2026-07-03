@@ -30,16 +30,20 @@ hydrate: /static/blog-page.js
 ```sh
 spells/lodestone render source.stone.html > page.html
 spells/lodestone render-md source.stone.html > page.md
-spells/lodestone render-md source.stone.html --set title=Blog --html-file posts=/tmp/posts.html
+spells/lodestone render source.stone.html --html-map /tmp/fragments.json > page.html
+spells/lodestone render-md source.stone.html --set title=Blog --html-file body=/tmp/body.html
 spells/lodestone manifest source.stone.html
 spells/lodestone verify source.stone.html
+spells/lodestone verify-output source.stone.html page.html --html-map /tmp/fragments.json
 ```
 
 `scripts/lodestone-cargo` keeps Cargo output under
 `${XDG_STATE_HOME:-$HOME/.local/state}/lodestone/cargo-target`.
 
-`verify` renders once as prerender and once as hydrate-baseline and compares the
-normalized HTML. If they differ, the page has more than one source of truth.
+`verify` checks that a source can be rendered. `verify-output` renders the source
+with the same inputs and compares normalized HTML against an output artifact. Use
+it to prove that generated or served pages still come directly from Lodestone
+rather than a post-render patcher.
 
 ## Language Rules
 
@@ -51,9 +55,22 @@ normalized HTML. If they differ, the page has more than one source of truth.
 - Attribute interpolation uses `href={href}` or `href={page.href}`.
 - Attribute shorthand uses `{slug}`.
 - Trusted server fragments use `{@html body}` or `{@html page.body}`.
+- Trusted fragments can be loaded one at a time with `--html-file KEY=PATH` or
+  as a declared JSON map with `--html-map PATH`.
 - Legacy `{{ page.key }}` interpolation remains supported for migration.
 - Unknown custom elements pass through unchanged.
 - Built-in custom elements expand to ordinary HTML with stable hydrate metadata.
+
+An `--html-map` file is a JSON object whose keys are metadata names and whose
+values are fragment file paths. Relative paths resolve from the map file's
+directory:
+
+```json
+{
+  "page_content": "fragments/page-content.html",
+  "navigation_html": "fragments/navigation.html"
+}
+```
 
 ## Built-Ins
 
