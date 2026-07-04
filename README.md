@@ -76,6 +76,7 @@ directory:
 
 - `<lode-page>...</lode-page>` wraps the page body in a stable lodestone root.
 - `<nostr-sync-pill slug="..."></nostr-sync-pill>` emits the standard sync pill.
+- `<lode-blog-post-list posts="[...]"></lode-blog-post-list>` emits inspectable blog post cards from public post catalog JSON.
 - `<lode-script src="..."></lode-script>` emits a deferred script tag.
 
 ## Storage

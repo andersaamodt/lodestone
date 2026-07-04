@@ -277,6 +277,7 @@ fn render_page(page: &StonePage) -> String {
     let mut html = expand_attribute_shorthand(&page.body, &page.frontmatter);
     html = interpolate(&html, &page.frontmatter);
     html = expand_lode_page(&html);
+    html = expand_lode_blog_post_lists(&html);
     html = expand_nostr_sync_pills(&html, page);
     html = expand_lode_scripts(&html);
     html
@@ -417,6 +418,217 @@ fn expand_lode_scripts(input: &str) -> String {
     })
 }
 
+fn expand_lode_blog_post_lists(input: &str) -> String {
+    expand_custom_element(input, "lode-blog-post-list", |raw| {
+        let posts_raw = attr_value(raw, "posts")
+            .map(|value| html_unescape(&value))
+            .unwrap_or_else(|| "[]".to_string());
+        let posts: Vec<Value> = serde_json::from_str(&posts_raw).unwrap_or_default();
+        render_blog_post_list(&posts)
+    })
+}
+
+fn render_blog_post_list(posts: &[Value]) -> String {
+    if posts.is_empty() {
+        return "<p class=\"placeholder\" data-lodestone-component=\"lode-blog-post-list\">No posts to show yet.</p>".to_string();
+    }
+    let mut out = String::new();
+    out.push_str("<div data-lodestone-component=\"lode-blog-post-list\">\n");
+    for post in posts {
+        render_blog_post_card(&mut out, post);
+    }
+    out.push_str("</div>");
+    out
+}
+
+fn render_blog_post_card(out: &mut String, post: &Value) {
+    let title = post_title(post);
+    let url = string_value(post, "url").unwrap_or_default();
+    let post_type = string_value_or(post, "type", "post");
+    let author = string_value_or(post, "author", "Blog Author");
+    let read_minutes = integer_value(post, "reading_minutes").max(1);
+    let published_date = string_value(post, "published_date")
+        .or_else(|| string_value(post, "pub_date"))
+        .unwrap_or_else(|| "Unknown date".to_string());
+    let published_timestamp = string_value(post, "published_timestamp")
+        .or_else(|| string_value(post, "published_at"))
+        .unwrap_or_default();
+    let year = string_value_or(post, "year", "Unknown");
+    let tags = tags_value(post);
+    let comments = integer_value(post, "comment_count").max(0);
+    let comments_label = if comments == 1 {
+        "1 comment".to_string()
+    } else {
+        format!("{comments} comments")
+    };
+
+    out.push_str("<article class=\"post-item blog-post-item");
+    if post_type == "link-share" {
+        out.push_str(" is-link-share");
+    }
+    out.push_str("\">\n");
+    out.push_str("  <div class=\"post-head\">\n");
+    out.push_str("    <div class=\"post-head-main\">\n");
+    out.push_str("      <h2 class=\"post-title\"><a href=\"");
+    out.push_str(&html_escape(&url));
+    out.push_str("\">");
+    out.push_str(&html_escape(&title));
+    out.push_str("</a></h2>\n");
+    if post_type == "link-share" {
+        render_blog_link_note(out, post, &author);
+    }
+    out.push_str("      <div class=\"post-head-divider\" aria-hidden=\"true\"></div>\n");
+    out.push_str(
+        "      <div class=\"post-byline post-byline-bottom\"><span class=\"post-author\">",
+    );
+    out.push_str(&html_escape(&author));
+    out.push_str("</span><span class=\"post-reading-inline\">");
+    out.push_str(&html_escape(&read_minutes.to_string()));
+    out.push_str(" min read</span><span class=\"post-date\"");
+    if !published_timestamp.is_empty() {
+        out.push_str(" title=\"");
+        out.push_str(&html_escape(&published_timestamp));
+        out.push('"');
+    }
+    out.push('>');
+    out.push_str(&html_escape(&published_date));
+    out.push_str("</span></div>\n");
+    out.push_str("    </div>\n");
+    out.push_str("  </div>\n");
+    render_blog_post_summary(out, post, &url);
+    out.push_str("  <div class=\"post-card-footer\"><div class=\"tags post-card-meta-tags\">");
+    render_blog_filter_pill(
+        out,
+        "tag blog-type-pill",
+        "types",
+        &post_type,
+        &format_post_type(&post_type),
+    );
+    render_blog_filter_pill(out, "tag blog-year-pill", "years", &year, &year);
+    for tag in tags {
+        out.push_str("<button type=\"button\" class=\"tag blog-inline-tag\" data-inline-tag=\"");
+        out.push_str(&html_escape(&tag));
+        out.push_str("\" aria-pressed=\"false\">");
+        out.push_str(&html_escape(&tag));
+        out.push_str("</button>");
+    }
+    out.push_str("</div><span class=\"post-card-comments-count\">");
+    out.push_str(&html_escape(&comments_label));
+    out.push_str("</span></div>\n");
+    out.push_str("</article>\n");
+}
+
+fn render_blog_link_note(out: &mut String, post: &Value, author: &str) {
+    let link_url = string_value(post, "link_url").unwrap_or_default();
+    out.push_str("      <div class=\"post-offsite-link-note\"><span class=\"post-offsite-link-kind\">Off-site link</span><span>Linked by ");
+    out.push_str(&html_escape(author));
+    out.push_str("</span>");
+    if !link_url.is_empty() {
+        out.push_str("<a class=\"post-offsite-url\" href=\"");
+        out.push_str(&html_escape(&link_url));
+        out.push_str("\" title=\"");
+        out.push_str(&html_escape(&link_url));
+        out.push_str("\">");
+        out.push_str(&html_escape(&link_url));
+        out.push_str("</a>");
+    }
+    out.push_str("</div>\n");
+}
+
+fn render_blog_post_summary(out: &mut String, post: &Value, url: &str) {
+    let summary = string_value(post, "summary").unwrap_or_default();
+    if summary.trim().is_empty() {
+        return;
+    }
+    out.push_str("  <div class=\"post-summary\"><p>");
+    out.push_str(&html_escape(summary.trim()));
+    out.push_str("</p>");
+    if bool_value(post, "summary_truncated") && !url.is_empty() {
+        out.push_str("<a class=\"post-summary-read-more\" href=\"");
+        out.push_str(&html_escape(url));
+        out.push_str("\">Read more...</a>");
+    }
+    out.push_str("</div>\n");
+}
+
+fn render_blog_filter_pill(
+    out: &mut String,
+    class_name: &str,
+    group: &str,
+    value: &str,
+    label: &str,
+) {
+    out.push_str("<button type=\"button\" class=\"");
+    out.push_str(&html_escape(class_name));
+    out.push_str("\" data-inline-filter-group=\"");
+    out.push_str(&html_escape(group));
+    out.push_str("\" data-inline-filter-value=\"");
+    out.push_str(&html_escape(value));
+    out.push_str("\" aria-pressed=\"false\" aria-label=\"Filter by ");
+    out.push_str(&html_escape(label));
+    out.push_str("\">");
+    out.push_str(&html_escape(label));
+    out.push_str("</button>");
+}
+
+fn post_title(post: &Value) -> String {
+    string_value(post, "title")
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| string_value(post, "summary").filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| "Untitled".to_string())
+}
+
+fn string_value(post: &Value, key: &str) -> Option<String> {
+    post.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn string_value_or(post: &Value, key: &str, fallback: &str) -> String {
+    string_value(post, key).unwrap_or_else(|| fallback.to_string())
+}
+
+fn integer_value(post: &Value, key: &str) -> i64 {
+    match post.get(key) {
+        Some(Value::Number(number)) => number.as_i64().unwrap_or(0),
+        Some(Value::String(text)) => text.parse::<i64>().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn bool_value(post: &Value, key: &str) -> bool {
+    post.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn tags_value(post: &Value) -> Vec<String> {
+    post.get("tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn format_post_type(value: &str) -> String {
+    value
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn expand_custom_element<F>(input: &str, tag: &str, mut render: F) -> String
 where
     F: FnMut(&str) -> String,
@@ -463,10 +675,17 @@ fn has_tag_name_boundary(raw: &str, tag: &str) -> bool {
 }
 
 fn attr_value(raw: &str, name: &str) -> Option<String> {
-    let needle = format!("{name}=\"");
-    let start = raw.find(&needle)? + needle.len();
+    let double_needle = format!("{name}=\"");
+    let single_needle = format!("{name}='");
+    let (start, quote) = if let Some(index) = raw.find(&double_needle) {
+        (index + double_needle.len(), '"')
+    } else if let Some(index) = raw.find(&single_needle) {
+        (index + single_needle.len(), '\'')
+    } else {
+        return None;
+    };
     let rest = &raw[start..];
-    let end = rest.find('"')?;
+    let end = rest.find(quote)?;
     Some(rest[..end].to_string())
 }
 
@@ -494,6 +713,14 @@ fn html_escape(raw: &str) -> String {
         }
     }
     out
+}
+
+fn html_unescape(raw: &str) -> String {
+    raw.replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
 }
 
 fn manifest_json(source_path: &str, page: &StonePage) -> String {
@@ -643,13 +870,31 @@ hydrate: /static/test.js
     }
 
     #[test]
-    fn leaves_app_specific_custom_elements_untouched() {
+    fn renders_blog_post_list_built_in() {
+        let page = parse_stone_page(
+            r#"<lode-blog-post-list posts='[{"url":"/posts/one","title":"One & Two","author":"Anders","published_date":"July 3, 2026","published_timestamp":"2026-07-03T00:00:00Z","summary":"Short summary","summary_truncated":true,"type":"longform","year":"2026","tags":["essay"],"reading_minutes":3,"comment_count":1}]'></lode-blog-post-list>"#,
+        )
+        .expect("valid page");
+        let html = render_page(&page);
+
+        assert!(html.contains("data-lodestone-component=\"lode-blog-post-list\""));
+        assert!(html.contains("<article class=\"post-item blog-post-item\">"));
+        assert!(html.contains("One &amp; Two"));
+        assert!(html.contains("3 min read"));
+        assert!(html.contains("Read more..."));
+        assert!(html.contains("1 comment"));
+        assert!(html.contains("data-inline-filter-value=\"longform\""));
+        assert!(html.contains("data-inline-tag=\"essay\""));
+    }
+
+    #[test]
+    fn renders_empty_blog_post_list_built_in() {
         let page = parse_stone_page("<lode-blog-post-list posts=\"[]\"></lode-blog-post-list>")
             .expect("valid page");
 
         assert_eq!(
             render_page(&page),
-            "<lode-blog-post-list posts=\"[]\"></lode-blog-post-list>"
+            "<p class=\"placeholder\" data-lodestone-component=\"lode-blog-post-list\">No posts to show yet.</p>"
         );
     }
 
