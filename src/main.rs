@@ -467,9 +467,9 @@ fn render_blog_post_card(out: &mut String, post: &Value) {
         out.push_str(" is-link-share");
     }
     out.push_str("\">\n");
-    out.push_str("  <div class=\"post-head\">\n");
-    out.push_str("    <div class=\"post-head-main\">\n");
-    out.push_str("      <h2 class=\"post-title\"><a href=\"");
+    out.push_str("<div class=\"post-head\">\n");
+    out.push_str("<div class=\"post-head-main\">\n");
+    out.push_str("<h2 class=\"post-title\"><a href=\"");
     out.push_str(&html_escape(&url));
     out.push_str("\">");
     out.push_str(&html_escape(&title));
@@ -477,9 +477,9 @@ fn render_blog_post_card(out: &mut String, post: &Value) {
     if post_type == "link-share" {
         render_blog_link_note(out, post, &author);
     }
-    out.push_str("      <div class=\"post-head-divider\" aria-hidden=\"true\"></div>\n");
+    out.push_str("<div class=\"post-head-divider\" aria-hidden=\"true\"></div>\n");
     out.push_str(
-        "      <div class=\"post-byline post-byline-bottom\"><span class=\"post-author\">",
+        "<div class=\"post-byline post-byline-bottom\"><span class=\"post-author\">",
     );
     out.push_str(&html_escape(&author));
     out.push_str("</span><span class=\"post-reading-inline\">");
@@ -493,10 +493,10 @@ fn render_blog_post_card(out: &mut String, post: &Value) {
     out.push('>');
     out.push_str(&html_escape(&published_date));
     out.push_str("</span></div>\n");
-    out.push_str("    </div>\n");
-    out.push_str("  </div>\n");
+    out.push_str("</div>\n");
+    out.push_str("</div>\n");
     render_blog_post_summary(out, post, &url);
-    out.push_str("  <div class=\"post-card-footer\"><div class=\"tags post-card-meta-tags\">");
+    out.push_str("<div class=\"post-card-footer\"><div class=\"tags post-card-meta-tags\">");
     render_blog_filter_pill(
         out,
         "tag blog-type-pill",
@@ -520,7 +520,7 @@ fn render_blog_post_card(out: &mut String, post: &Value) {
 
 fn render_blog_link_note(out: &mut String, post: &Value, author: &str) {
     let link_url = string_value(post, "link_url").unwrap_or_default();
-    out.push_str("      <div class=\"post-offsite-link-note\"><span class=\"post-offsite-link-kind\">Off-site link</span><span>Linked by ");
+    out.push_str("<div class=\"post-offsite-link-note\"><span class=\"post-offsite-link-kind\">Off-site link</span><span>Linked by ");
     out.push_str(&html_escape(author));
     out.push_str("</span>");
     if !link_url.is_empty() {
@@ -540,7 +540,7 @@ fn render_blog_post_summary(out: &mut String, post: &Value, url: &str) {
     if summary.trim().is_empty() {
         return;
     }
-    out.push_str("  <div class=\"post-summary\"><p>");
+    out.push_str("<div class=\"post-summary\"><p>");
     out.push_str(&html_escape(summary.trim()));
     out.push_str("</p>");
     if bool_value(post, "summary_truncated") && !url.is_empty() {
