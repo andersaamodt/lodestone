@@ -17,7 +17,7 @@ hydrate: /static/blog-page.js
 
 <lode-page>
   <h1>{title}</h1>
-  <nostr-sync-pill slug="blog" />
+  <site-callout slug="blog" />
   <main>
     HTML stays HTML.
   </main>
@@ -30,15 +30,16 @@ hydrate: /static/blog-page.js
 ```sh
 spells/lodestone render source.stone.html > page.html
 spells/lodestone render-md source.stone.html > page.md
+spells/lodestone render source.stone.html --component-command ./site-components > page.html
 spells/lodestone render source.stone.html --html-map /tmp/fragments.json > page.html
 spells/lodestone render-md source.stone.html --set title=Blog --html-file body=/tmp/body.html
 spells/lodestone manifest source.stone.html
 spells/lodestone verify source.stone.html
-spells/lodestone verify-output source.stone.html page.html --html-map /tmp/fragments.json
+spells/lodestone verify-output source.stone.html page.html --html-map /tmp/fragments.json --component-command ./site-components
 ```
 
-`scripts/lodestone-cargo` keeps Cargo output under
-`${XDG_STATE_HOME:-$HOME/.local/state}/lodestone/cargo-target`.
+The Lodestone spell keeps Cargo output under a source-signatured directory at
+`${XDG_STATE_HOME:-$HOME/.local/state}/lodestone/cargo-target/`.
 
 `verify` checks that a source can be rendered. `verify-output` renders the source
 with the same inputs and compares normalized HTML against an output artifact. Use
@@ -57,6 +58,8 @@ rather than a post-render patcher.
 - Trusted server fragments use `{@html body}` or `{@html page.body}`.
 - Trusted fragments can be loaded one at a time with `--html-file KEY=PATH` or
   as a declared JSON map with `--html-map PATH`.
+- `--component-command PATH` lets the caller own site-specific custom elements
+  without teaching Lodestone their semantics.
 - Legacy `{{ page.key }}` interpolation remains supported for migration.
 - Unknown custom elements pass through unchanged.
 - Built-in custom elements expand to ordinary HTML with stable hydrate metadata.
@@ -75,9 +78,12 @@ directory:
 ## Built-Ins
 
 - `<lode-page>...</lode-page>` wraps the page body in a stable lodestone root.
-- `<nostr-sync-pill slug="..."></nostr-sync-pill>` emits the standard sync pill.
-- `<lode-blog-post-list posts="[...]"></lode-blog-post-list>` emits inspectable blog post cards from public post catalog JSON.
 - `<lode-script src="..."></lode-script>` emits a deferred script tag.
+
+Site-specific component ownership stays outside Lodestone. When a rendered page
+uses custom elements such as `<site-callout>`, pass `--component-command` and
+let that site command render them or return exit status `3` to leave them
+unchanged.
 
 ## Storage
 

@@ -8,6 +8,7 @@ case "${1-}" in
   cat <<'USAGE'
 Usage: lodestone <render|render-md|manifest|verify> FILE
        lodestone verify-output FILE OUTPUT_FILE
+       lodestone render FILE --component-command /path/to/renderer
 
 Render .stone.html files with YAML frontmatter and HTML bodies.
 USAGE
@@ -19,6 +20,22 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+. "$repo_root/scripts/lodestone-paths.sh"
+
+lodestone_build_signature() {
+  {
+    cksum "$repo_root/Cargo.toml"
+    find "$repo_root/src" -type f -print 2>/dev/null | sort | while IFS= read -r source_file || [ -n "$source_file" ]; do
+      [ -n "$source_file" ] || continue
+      cksum "$source_file"
+    done
+  } | cksum | awk '{ printf "%s-%s\n", $1, $2 }'
+}
+
+current_signature=$(lodestone_build_signature)
+export CARGO_TARGET_DIR
+CARGO_TARGET_DIR="$(lodestone_cargo_target_dir)/$current_signature"
+mkdir -p "$CARGO_TARGET_DIR"
 action=${1-}
 source_file=${2-}
 
@@ -31,10 +48,22 @@ source_file=${2-}
   exit 1
 }
 
+case "$source_file" in
+/*)
+  source_path=$source_file
+  ;;
+*)
+  source_path=$(pwd -P)/$source_file
+  ;;
+esac
+
 case "$action" in
 render|render-md|manifest|verify|verify-output)
   shift 2
-  "$repo_root/scripts/lodestone-cargo" run --quiet --manifest-path "$repo_root/Cargo.toml" -- "$action" "$source_file" "$@"
+  (
+    cd "$repo_root" || exit 1
+    cargo run --quiet -- "$action" "$source_path" "$@"
+  )
   ;;
 *)
   printf '%s\n' "lodestone: unknown action: $action" >&2

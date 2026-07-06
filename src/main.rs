@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Command, Stdio};
 
 use serde_json::{json, Value};
 
@@ -12,6 +13,16 @@ struct StonePage {
     override_keys: BTreeSet<String>,
     raw_frontmatter: Option<String>,
     body: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RenderOptions {
+    component_command: Option<String>,
+}
+
+enum ComponentRender {
+    Handled(String),
+    Unhandled,
 }
 
 fn main() {
@@ -49,22 +60,23 @@ fn main() {
     } else {
         None
     };
-    if let Err(error) = apply_overrides(&mut page, &extra_args) {
+    let mut render_options = RenderOptions::default();
+    if let Err(error) = apply_overrides(&mut page, &extra_args, &mut render_options) {
         eprintln!("lodestone: {error}");
         process::exit(2);
     }
     match action.as_str() {
         "render" => {
-            print!("{}", render_page(&page));
+            print!("{}", render_page_or_exit(&page, &render_options));
         }
         "render-md" => {
-            print!("{}", render_markdown_page(&page));
+            print!("{}", render_markdown_page_or_exit(&page, &render_options));
         }
         "manifest" => {
             println!("{}", manifest_json(&source_path, &page));
         }
         "verify" => {
-            let _ = render_page(&page);
+            let _ = render_page_or_exit(&page, &render_options);
             println!("ok");
         }
         "verify-output" => {
@@ -76,7 +88,9 @@ fn main() {
                     process::exit(1);
                 }
             };
-            if normalize_html(&render_page(&page)) == normalize_html(&expected) {
+            if normalize_html(&render_page_or_exit(&page, &render_options))
+                == normalize_html(&expected)
+            {
                 println!("ok");
             } else {
                 eprintln!("lodestone: rendered output differs from expected output");
@@ -91,13 +105,37 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("Usage: lodestone <render|render-md|manifest|verify> FILE [--set KEY=VALUE] [--html-file KEY=PATH] [--html-map PATH]");
-    println!("       lodestone verify-output FILE OUTPUT_FILE [--set KEY=VALUE] [--html-file KEY=PATH] [--html-map PATH]");
+    println!("Usage: lodestone <render|render-md|manifest|verify> FILE [--set KEY=VALUE] [--html-file KEY=PATH] [--html-map PATH] [--component-command PATH]");
+    println!("       lodestone verify-output FILE OUTPUT_FILE [--set KEY=VALUE] [--html-file KEY=PATH] [--html-map PATH] [--component-command PATH]");
     println!();
     println!("Render .stone.html files with YAML frontmatter and HTML bodies.");
 }
 
-fn apply_overrides(page: &mut StonePage, args: &[String]) -> Result<(), String> {
+fn render_page_or_exit(page: &StonePage, render_options: &RenderOptions) -> String {
+    match render_page(page, render_options) {
+        Ok(html) => html,
+        Err(error) => {
+            eprintln!("lodestone: {error}");
+            process::exit(1);
+        }
+    }
+}
+
+fn render_markdown_page_or_exit(page: &StonePage, render_options: &RenderOptions) -> String {
+    match render_markdown_page(page, render_options) {
+        Ok(markdown) => markdown,
+        Err(error) => {
+            eprintln!("lodestone: {error}");
+            process::exit(1);
+        }
+    }
+}
+
+fn apply_overrides(
+    page: &mut StonePage,
+    args: &[String],
+    render_options: &mut RenderOptions,
+) -> Result<(), String> {
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -126,6 +164,13 @@ fn apply_overrides(page: &mut StonePage, args: &[String]) -> Result<(), String> 
                     return Err("--html-map requires PATH".to_string());
                 };
                 apply_html_map(page, path)?;
+            }
+            "--component-command" => {
+                index += 1;
+                let Some(path) = args.get(index) else {
+                    return Err("--component-command requires PATH".to_string());
+                };
+                render_options.component_command = Some(path.clone());
             }
             unknown => {
                 return Err(format!("unknown option: {unknown}"));
@@ -273,26 +318,27 @@ fn unquote(value: &str) -> String {
     }
 }
 
-fn render_page(page: &StonePage) -> String {
+fn render_page(page: &StonePage, render_options: &RenderOptions) -> Result<String, String> {
     let mut html = expand_attribute_shorthand(&page.body, &page.frontmatter);
     html = interpolate(&html, &page.frontmatter);
     html = expand_lode_page(&html);
-    html = expand_lode_blog_post_lists(&html);
-    html = expand_nostr_sync_pills(&html, page);
     html = expand_lode_scripts(&html);
-    html
+    expand_external_components(&html, page, render_options)
 }
 
-fn render_markdown_page(page: &StonePage) -> String {
+fn render_markdown_page(
+    page: &StonePage,
+    render_options: &RenderOptions,
+) -> Result<String, String> {
     let mut out = String::new();
     if let Some(raw_frontmatter) = &page.raw_frontmatter {
         out.push_str("---\n");
         out.push_str(&render_frontmatter(page, raw_frontmatter));
         out.push_str("\n---\n\n");
     }
-    let rendered_body = render_page(page);
+    let rendered_body = render_page(page, render_options)?;
     out.push_str(rendered_body.trim_start_matches('\n'));
-    out
+    Ok(out)
 }
 
 fn render_frontmatter(page: &StonePage, raw_frontmatter: &str) -> String {
@@ -396,18 +442,6 @@ fn expand_lode_page(input: &str) -> String {
     output.replace("</lode-page>", "</div>")
 }
 
-fn expand_nostr_sync_pills(input: &str, page: &StonePage) -> String {
-    expand_custom_element(input, "nostr-sync-pill", |raw| {
-        let slug = attr_value(raw, "slug")
-            .or_else(|| page.frontmatter.get("slug").cloned())
-            .unwrap_or_else(|| "page".to_string());
-        format!(
-            "<span class=\"page-sync-status-pill status-unknown nostr-sync-pill\" data-lodestone-component=\"nostr-sync-pill\" data-nostr-sync-slug=\"{}\" aria-live=\"polite\">Nostr sync</span>",
-            html_escape(&slug)
-        )
-    })
-}
-
 fn expand_lode_scripts(input: &str) -> String {
     expand_custom_element(input, "lode-script", |raw| {
         let src = attr_value(raw, "src").unwrap_or_default();
@@ -416,217 +450,6 @@ fn expand_lode_scripts(input: &str) -> String {
             html_escape(&src)
         )
     })
-}
-
-fn expand_lode_blog_post_lists(input: &str) -> String {
-    expand_custom_element(input, "lode-blog-post-list", |raw| {
-        let posts_raw = attr_value(raw, "posts")
-            .map(|value| html_unescape(&value))
-            .unwrap_or_else(|| "[]".to_string());
-        let posts: Vec<Value> = serde_json::from_str(&posts_raw).unwrap_or_default();
-        render_blog_post_list(&posts)
-    })
-}
-
-fn render_blog_post_list(posts: &[Value]) -> String {
-    if posts.is_empty() {
-        return "<p class=\"placeholder\" data-lodestone-component=\"lode-blog-post-list\">No posts to show yet.</p>".to_string();
-    }
-    let mut out = String::new();
-    out.push_str("<div data-lodestone-component=\"lode-blog-post-list\">\n");
-    for post in posts {
-        render_blog_post_card(&mut out, post);
-    }
-    out.push_str("</div>");
-    out
-}
-
-fn render_blog_post_card(out: &mut String, post: &Value) {
-    let title = post_title(post);
-    let url = string_value(post, "url").unwrap_or_default();
-    let post_type = string_value_or(post, "type", "post");
-    let author = string_value_or(post, "author", "Blog Author");
-    let read_minutes = integer_value(post, "reading_minutes").max(1);
-    let published_date = string_value(post, "published_date")
-        .or_else(|| string_value(post, "pub_date"))
-        .unwrap_or_else(|| "Unknown date".to_string());
-    let published_timestamp = string_value(post, "published_timestamp")
-        .or_else(|| string_value(post, "published_at"))
-        .unwrap_or_default();
-    let year = string_value_or(post, "year", "Unknown");
-    let tags = tags_value(post);
-    let comments = integer_value(post, "comment_count").max(0);
-    let comments_label = if comments == 1 {
-        "1 comment".to_string()
-    } else {
-        format!("{comments} comments")
-    };
-
-    out.push_str("<article class=\"post-item blog-post-item");
-    if post_type == "link-share" {
-        out.push_str(" is-link-share");
-    }
-    out.push_str("\">\n");
-    out.push_str("<div class=\"post-head\">\n");
-    out.push_str("<div class=\"post-head-main\">\n");
-    out.push_str("<h2 class=\"post-title\"><a href=\"");
-    out.push_str(&html_escape(&url));
-    out.push_str("\">");
-    out.push_str(&html_escape(&title));
-    out.push_str("</a></h2>\n");
-    if post_type == "link-share" {
-        render_blog_link_note(out, post, &author);
-    }
-    out.push_str("<div class=\"post-head-divider\" aria-hidden=\"true\"></div>\n");
-    out.push_str(
-        "<div class=\"post-byline post-byline-bottom\"><span class=\"post-author\">",
-    );
-    out.push_str(&html_escape(&author));
-    out.push_str("</span><span class=\"post-reading-inline\">");
-    out.push_str(&html_escape(&read_minutes.to_string()));
-    out.push_str(" min read</span><span class=\"post-date\"");
-    if !published_timestamp.is_empty() {
-        out.push_str(" title=\"");
-        out.push_str(&html_escape(&published_timestamp));
-        out.push('"');
-    }
-    out.push('>');
-    out.push_str(&html_escape(&published_date));
-    out.push_str("</span></div>\n");
-    out.push_str("</div>\n");
-    out.push_str("</div>\n");
-    render_blog_post_summary(out, post, &url);
-    out.push_str("<div class=\"post-card-footer\"><div class=\"tags post-card-meta-tags\">");
-    render_blog_filter_pill(
-        out,
-        "tag blog-type-pill",
-        "types",
-        &post_type,
-        &format_post_type(&post_type),
-    );
-    render_blog_filter_pill(out, "tag blog-year-pill", "years", &year, &year);
-    for tag in tags {
-        out.push_str("<button type=\"button\" class=\"tag blog-inline-tag\" data-inline-tag=\"");
-        out.push_str(&html_escape(&tag));
-        out.push_str("\" aria-pressed=\"false\">");
-        out.push_str(&html_escape(&tag));
-        out.push_str("</button>");
-    }
-    out.push_str("</div><span class=\"post-card-comments-count\">");
-    out.push_str(&html_escape(&comments_label));
-    out.push_str("</span></div>\n");
-    out.push_str("</article>\n");
-}
-
-fn render_blog_link_note(out: &mut String, post: &Value, author: &str) {
-    let link_url = string_value(post, "link_url").unwrap_or_default();
-    out.push_str("<div class=\"post-offsite-link-note\"><span class=\"post-offsite-link-kind\">Off-site link</span><span>Linked by ");
-    out.push_str(&html_escape(author));
-    out.push_str("</span>");
-    if !link_url.is_empty() {
-        out.push_str("<a class=\"post-offsite-url\" href=\"");
-        out.push_str(&html_escape(&link_url));
-        out.push_str("\" title=\"");
-        out.push_str(&html_escape(&link_url));
-        out.push_str("\">");
-        out.push_str(&html_escape(&link_url));
-        out.push_str("</a>");
-    }
-    out.push_str("</div>\n");
-}
-
-fn render_blog_post_summary(out: &mut String, post: &Value, url: &str) {
-    let summary = string_value(post, "summary").unwrap_or_default();
-    if summary.trim().is_empty() {
-        return;
-    }
-    out.push_str("<div class=\"post-summary\"><p>");
-    out.push_str(&html_escape(summary.trim()));
-    out.push_str("</p>");
-    if bool_value(post, "summary_truncated") && !url.is_empty() {
-        out.push_str("<a class=\"post-summary-read-more\" href=\"");
-        out.push_str(&html_escape(url));
-        out.push_str("\">Read more...</a>");
-    }
-    out.push_str("</div>\n");
-}
-
-fn render_blog_filter_pill(
-    out: &mut String,
-    class_name: &str,
-    group: &str,
-    value: &str,
-    label: &str,
-) {
-    out.push_str("<button type=\"button\" class=\"");
-    out.push_str(&html_escape(class_name));
-    out.push_str("\" data-inline-filter-group=\"");
-    out.push_str(&html_escape(group));
-    out.push_str("\" data-inline-filter-value=\"");
-    out.push_str(&html_escape(value));
-    out.push_str("\" aria-pressed=\"false\" aria-label=\"Filter by ");
-    out.push_str(&html_escape(label));
-    out.push_str("\">");
-    out.push_str(&html_escape(label));
-    out.push_str("</button>");
-}
-
-fn post_title(post: &Value) -> String {
-    string_value(post, "title")
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| string_value(post, "summary").filter(|value| !value.trim().is_empty()))
-        .unwrap_or_else(|| "Untitled".to_string())
-}
-
-fn string_value(post: &Value, key: &str) -> Option<String> {
-    post.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn string_value_or(post: &Value, key: &str, fallback: &str) -> String {
-    string_value(post, key).unwrap_or_else(|| fallback.to_string())
-}
-
-fn integer_value(post: &Value, key: &str) -> i64 {
-    match post.get(key) {
-        Some(Value::Number(number)) => number.as_i64().unwrap_or(0),
-        Some(Value::String(text)) => text.parse::<i64>().unwrap_or(0),
-        _ => 0,
-    }
-}
-
-fn bool_value(post: &Value, key: &str) -> bool {
-    post.get(key).and_then(Value::as_bool).unwrap_or(false)
-}
-
-fn tags_value(post: &Value) -> Vec<String> {
-    post.get("tags")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn format_post_type(value: &str) -> String {
-    value
-        .split(['-', '_'])
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn expand_custom_element<F>(input: &str, tag: &str, mut render: F) -> String
@@ -666,6 +489,232 @@ where
     }
     output.push_str(rest);
     output
+}
+
+fn expand_external_components(
+    input: &str,
+    page: &StonePage,
+    render_options: &RenderOptions,
+) -> Result<String, String> {
+    let Some(component_command) = &render_options.component_command else {
+        return Ok(input.to_string());
+    };
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('<') {
+        output.push_str(&rest[..start]);
+        let after_start = &rest[start..];
+        if after_start.starts_with("</")
+            || after_start.starts_with("<!--")
+            || after_start.starts_with("<!")
+            || after_start.starts_with("<?")
+        {
+            output.push('<');
+            rest = &after_start[1..];
+            continue;
+        }
+        let Some(open_end) = find_tag_end(after_start) else {
+            output.push_str(after_start);
+            return Ok(output);
+        };
+        let raw_open = &after_start[..open_end + 1];
+        let Some(tag_name) = parse_tag_name(raw_open) else {
+            output.push_str(raw_open);
+            rest = &after_start[open_end + 1..];
+            continue;
+        };
+        if !is_custom_element_name(&tag_name) || is_lodestone_core_component(&tag_name) {
+            output.push_str(raw_open);
+            rest = &after_start[open_end + 1..];
+            continue;
+        }
+
+        let attrs = parse_attrs(raw_open);
+        if raw_open.ends_with("/>") {
+            match run_component_command(component_command, &tag_name, &attrs, "", page)? {
+                ComponentRender::Handled(rendered) => output.push_str(&rendered),
+                ComponentRender::Unhandled => output.push_str(raw_open),
+            }
+            rest = &after_start[open_end + 1..];
+            continue;
+        }
+
+        let close_tag = format!("</{tag_name}>");
+        let after_open = &after_start[open_end + 1..];
+        if let Some(close_start) = after_open.find(&close_tag) {
+            let body = &after_open[..close_start];
+            match run_component_command(component_command, &tag_name, &attrs, body, page)? {
+                ComponentRender::Handled(rendered) => output.push_str(&rendered),
+                ComponentRender::Unhandled => {
+                    output.push_str(raw_open);
+                    output.push_str(body);
+                    output.push_str(&close_tag);
+                }
+            }
+            rest = &after_open[close_start + close_tag.len()..];
+        } else {
+            output.push_str(raw_open);
+            rest = after_open;
+        }
+    }
+    output.push_str(rest);
+    Ok(output)
+}
+
+fn run_component_command(
+    component_command: &str,
+    tag_name: &str,
+    attrs: &BTreeMap<String, String>,
+    body: &str,
+    page: &StonePage,
+) -> Result<ComponentRender, String> {
+    let payload = json!({
+        "name": tag_name,
+        "attrs": attrs,
+        "body": body,
+        "frontmatter": &page.frontmatter,
+    })
+    .to_string();
+    let mut child = Command::new(component_command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not start component command for {tag_name}: {error}"))?;
+    {
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err(format!(
+                "could not open stdin for component command handling {tag_name}"
+            ));
+        };
+        stdin.write_all(payload.as_bytes()).map_err(|error| {
+            format!("could not write component payload for {tag_name}: {error}")
+        })?;
+    }
+    let output = child.wait_with_output().map_err(|error| {
+        format!("could not wait for component command handling {tag_name}: {error}")
+    })?;
+    match output.status.code() {
+        Some(0) => String::from_utf8(output.stdout)
+            .map(ComponentRender::Handled)
+            .map_err(|error| {
+                format!("component command for {tag_name} returned invalid UTF-8: {error}")
+            }),
+        Some(3) => Ok(ComponentRender::Unhandled),
+        Some(code) => Err(format!(
+            "component command failed for {tag_name} with exit status {code}"
+        )),
+        None => Err(format!(
+            "component command failed for {tag_name} without an exit status"
+        )),
+    }
+}
+
+fn find_tag_end(raw: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, ch) in raw.char_indices() {
+        if index == 0 {
+            continue;
+        }
+        match ch {
+            '"' | '\'' if quote.is_none() => quote = Some(ch),
+            '"' | '\'' if quote == Some(ch) => quote = None,
+            '>' if quote.is_none() => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_tag_name(raw_open: &str) -> Option<String> {
+    let rest = raw_open.strip_prefix('<')?;
+    if rest.starts_with('/') {
+        return None;
+    }
+    let end = rest
+        .find(|ch: char| matches!(ch, ' ' | '\n' | '\r' | '\t' | '/' | '>'))
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn is_custom_element_name(name: &str) -> bool {
+    name.contains('-')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+}
+
+fn is_lodestone_core_component(name: &str) -> bool {
+    matches!(name, "lode-page" | "lode-script")
+}
+
+fn parse_attrs(raw_open: &str) -> BTreeMap<String, String> {
+    let mut attrs = BTreeMap::new();
+    let Some(tag_name) = parse_tag_name(raw_open) else {
+        return attrs;
+    };
+    let mut index = 1 + tag_name.len();
+    let bytes = raw_open.as_bytes();
+    while index < raw_open.len() {
+        while index < raw_open.len() && matches!(bytes[index], b' ' | b'\n' | b'\r' | b'\t') {
+            index += 1;
+        }
+        if index >= raw_open.len()
+            || bytes[index] == b'>'
+            || (bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'>'))
+        {
+            break;
+        }
+        let key_start = index;
+        while index < raw_open.len() && is_attr_name_byte(bytes[index]) {
+            index += 1;
+        }
+        if key_start == index {
+            index += 1;
+            continue;
+        }
+        let key = &raw_open[key_start..index];
+        while index < raw_open.len() && matches!(bytes[index], b' ' | b'\n' | b'\r' | b'\t') {
+            index += 1;
+        }
+        let mut value = String::new();
+        if index < raw_open.len() && bytes[index] == b'=' {
+            index += 1;
+            while index < raw_open.len() && matches!(bytes[index], b' ' | b'\n' | b'\r' | b'\t') {
+                index += 1;
+            }
+            if index < raw_open.len() && matches!(bytes[index], b'"' | b'\'') {
+                let quote = bytes[index];
+                index += 1;
+                let value_start = index;
+                while index < raw_open.len() && bytes[index] != quote {
+                    index += 1;
+                }
+                value = raw_open[value_start..index].to_string();
+                if index < raw_open.len() {
+                    index += 1;
+                }
+            } else {
+                let value_start = index;
+                while index < raw_open.len()
+                    && !matches!(bytes[index], b' ' | b'\n' | b'\r' | b'\t' | b'>' | b'/')
+                {
+                    index += 1;
+                }
+                value = raw_open[value_start..index].to_string();
+            }
+        }
+        attrs.insert(key.to_string(), value);
+    }
+    attrs
+}
+
+fn is_attr_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.')
 }
 
 fn has_tag_name_boundary(raw: &str, tag: &str) -> bool {
@@ -715,20 +764,41 @@ fn html_escape(raw: &str) -> String {
     out
 }
 
-fn html_unescape(raw: &str) -> String {
-    raw.replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&gt;", ">")
-        .replace("&lt;", "<")
-        .replace("&amp;", "&")
-}
-
 fn manifest_json(source_path: &str, page: &StonePage) -> String {
+    let components = manifest_components(&page.body);
     json!({
         "source": source_path,
         "page": &page.frontmatter,
+        "components": components,
     })
     .to_string()
+}
+
+fn manifest_components(input: &str) -> Vec<String> {
+    let mut found = BTreeSet::new();
+    let mut rest = input;
+    while let Some(start) = rest.find('<') {
+        let after_start = &rest[start..];
+        if after_start.starts_with("</")
+            || after_start.starts_with("<!--")
+            || after_start.starts_with("<!")
+            || after_start.starts_with("<?")
+        {
+            rest = &after_start[1..];
+            continue;
+        }
+        let Some(open_end) = find_tag_end(after_start) else {
+            break;
+        };
+        let raw_open = &after_start[..open_end + 1];
+        if let Some(tag_name) = parse_tag_name(raw_open) {
+            if is_custom_element_name(&tag_name) {
+                found.insert(tag_name);
+            }
+        }
+        rest = &after_start[open_end + 1..];
+    }
+    found.into_iter().collect()
 }
 
 fn normalize_html(input: &str) -> String {
@@ -750,16 +820,14 @@ hydrate: /static/test.js
 
 <lode-page>
 <h1>{title}</h1>
-<nostr-sync-pill {slug}></nostr-sync-pill>
 <lode-script src={hydrate}></lode-script>
 </lode-page>
 "#,
         )
         .expect("valid page");
-        let html = render_page(&page);
+        let html = render_page(&page, &RenderOptions::default()).expect("rendered page");
         assert!(html.contains("data-lodestone-root=\"page\""));
         assert!(html.contains("<h1>Test Page</h1>"));
-        assert!(html.contains("data-nostr-sync-slug=\"test-page\""));
         assert!(html.contains("defer src=\"/static/test.js\""));
     }
 
@@ -767,7 +835,9 @@ hydrate: /static/test.js
     fn escapes_interpolation() {
         let page = parse_stone_page("---\ntitle: \"<Bad>\"\n---\n<h1>{{ page.title }}</h1>\n")
             .expect("valid page");
-        assert!(render_page(&page).contains("&lt;Bad&gt;"));
+        assert!(render_page(&page, &RenderOptions::default())
+            .expect("rendered page")
+            .contains("&lt;Bad&gt;"));
     }
 
     #[test]
@@ -776,14 +846,16 @@ hydrate: /static/test.js
             "---\nbody: \"<strong>Ready</strong>\"\n---\n<div>{@html body}</div>\n",
         )
         .expect("valid page");
-        assert!(render_page(&page).contains("<div><strong>Ready</strong></div>"));
+        assert!(render_page(&page, &RenderOptions::default())
+            .expect("rendered page")
+            .contains("<div><strong>Ready</strong></div>"));
     }
 
     #[test]
     fn supports_svelte_like_attribute_expressions() {
         let page = parse_stone_page("---\nhref: /hello\n---\n<a href={href}>{href}</a>\n")
             .expect("valid page");
-        let html = render_page(&page);
+        let html = render_page(&page, &RenderOptions::default()).expect("rendered page");
         assert!(html.contains("<a href=\"/hello\">/hello</a>"));
     }
 
@@ -793,7 +865,9 @@ hydrate: /static/test.js
             "---\nversion: 123\n---\n<script src=\"/app.js?v={version}\"></script>\n",
         )
         .expect("valid page");
-        assert!(render_page(&page).contains("src=\"/app.js?v=123\""));
+        assert!(render_page(&page, &RenderOptions::default())
+            .expect("rendered page")
+            .contains("src=\"/app.js?v=123\""));
     }
 
     #[test]
@@ -803,10 +877,15 @@ hydrate: /static/test.js
         apply_overrides(
             &mut page,
             &[String::from("--set"), String::from("title=New")],
+            &mut RenderOptions::default(),
         )
         .expect("override");
-        assert!(render_page(&page).contains("<h1>New</h1>"));
-        assert!(render_markdown_page(&page).contains("title: \"New\""));
+        assert!(render_page(&page, &RenderOptions::default())
+            .expect("rendered page")
+            .contains("<h1>New</h1>"));
+        assert!(render_markdown_page(&page, &RenderOptions::default())
+            .expect("rendered markdown")
+            .contains("title: \"New\""));
     }
 
     #[test]
@@ -825,11 +904,12 @@ hydrate: /static/test.js
                 String::from("--html-map"),
                 map_path.to_string_lossy().to_string(),
             ],
+            &mut RenderOptions::default(),
         )
         .expect("html map");
 
         assert_eq!(
-            render_page(&page),
+            render_page(&page, &RenderOptions::default()).expect("rendered page"),
             "<main><strong>Mapped fragment</strong></main>"
         );
         fs::remove_dir_all(&temp_dir).expect("cleanup");
@@ -853,49 +933,65 @@ hydrate: /static/test.js
             .expect("valid page");
         page.frontmatter
             .insert(String::from("body"), String::from("<strong>Body</strong>"));
-        let rendered = render_markdown_page(&page);
+        let rendered =
+            render_markdown_page(&page, &RenderOptions::default()).expect("rendered markdown");
         assert!(rendered.contains("<strong>Body</strong>"));
         assert!(!rendered.contains("body:"));
     }
 
     #[test]
-    fn renders_nostr_sync_pill_with_shared_status_class() {
+    fn renders_external_components_through_command() {
         let page = parse_stone_page(
-            "---\nslug: oeuvre\n---\n<nostr-sync-pill slug={slug}></nostr-sync-pill>\n",
+            "---\nslug: oeuvre\n---\n<demo-card label=\"Essay\">Inner body</demo-card>\n",
         )
         .expect("valid page");
-        let rendered = render_page(&page);
-        assert!(rendered.contains("page-sync-status-pill status-unknown nostr-sync-pill"));
-        assert!(rendered.contains("data-nostr-sync-slug=\"oeuvre\""));
+        let temp_dir = unique_test_dir("lodestone-component-command");
+        fs::create_dir_all(&temp_dir).expect("temp dir");
+        let command_path = temp_dir.join("component-command.sh");
+        fs::write(
+            &command_path,
+            "#!/bin/sh\nset -eu\npayload=$(cat)\nprintf '%s' \"$payload\" | grep -F '\"name\":\"demo-card\"' >/dev/null\nprintf '%s' \"$payload\" | grep -F '\"label\":\"Essay\"' >/dev/null\nprintf '%s' \"$payload\" | grep -F '\"slug\":\"oeuvre\"' >/dev/null\nprintf '<aside data-demo=\"1\">Handled</aside>'\n",
+        )
+        .expect("script");
+        make_executable(&command_path);
+
+        let rendered = render_page(
+            &page,
+            &RenderOptions {
+                component_command: Some(command_path.to_string_lossy().to_string()),
+            },
+        )
+        .expect("rendered page");
+        assert_eq!(rendered, "<aside data-demo=\"1\">Handled</aside>\n");
+        fs::remove_dir_all(&temp_dir).expect("cleanup");
     }
 
     #[test]
-    fn renders_blog_post_list_built_in() {
-        let page = parse_stone_page(
-            r#"<lode-blog-post-list posts='[{"url":"/posts/one","title":"One & Two","author":"Anders","published_date":"July 3, 2026","published_timestamp":"2026-07-03T00:00:00Z","summary":"Short summary","summary_truncated":true,"type":"longform","year":"2026","tags":["essay"],"reading_minutes":3,"comment_count":1}]'></lode-blog-post-list>"#,
+    fn leaves_unhandled_external_components_untouched() {
+        let page =
+            parse_stone_page("<demo-card label=\"Essay\">Inner body</demo-card>").expect("page");
+        let temp_dir = unique_test_dir("lodestone-component-unhandled");
+        fs::create_dir_all(&temp_dir).expect("temp dir");
+        let command_path = temp_dir.join("component-command.sh");
+        fs::write(
+            &command_path,
+            "#!/bin/sh\nset -eu\npayload=$(cat)\nprintf '%s' \"$payload\" | grep -F '\"name\":\"other-card\"' >/dev/null || exit 3\nprintf '<aside>other</aside>'\n",
         )
-        .expect("valid page");
-        let html = render_page(&page);
+        .expect("script");
+        make_executable(&command_path);
 
-        assert!(html.contains("data-lodestone-component=\"lode-blog-post-list\""));
-        assert!(html.contains("<article class=\"post-item blog-post-item\">"));
-        assert!(html.contains("One &amp; Two"));
-        assert!(html.contains("3 min read"));
-        assert!(html.contains("Read more..."));
-        assert!(html.contains("1 comment"));
-        assert!(html.contains("data-inline-filter-value=\"longform\""));
-        assert!(html.contains("data-inline-tag=\"essay\""));
-    }
-
-    #[test]
-    fn renders_empty_blog_post_list_built_in() {
-        let page = parse_stone_page("<lode-blog-post-list posts=\"[]\"></lode-blog-post-list>")
-            .expect("valid page");
-
+        let rendered = render_page(
+            &page,
+            &RenderOptions {
+                component_command: Some(command_path.to_string_lossy().to_string()),
+            },
+        )
+        .expect("rendered page");
         assert_eq!(
-            render_page(&page),
-            "<p class=\"placeholder\" data-lodestone-component=\"lode-blog-post-list\">No posts to show yet.</p>"
+            rendered,
+            "<demo-card label=\"Essay\">Inner body</demo-card>"
         );
+        fs::remove_dir_all(&temp_dir).expect("cleanup");
     }
 
     #[test]
@@ -927,7 +1023,9 @@ hydrate: /static/test.js
             page.frontmatter.get("title").map(String::as_str),
             Some("CRLF")
         );
-        assert!(render_page(&page).contains("<h1>CRLF</h1>"));
+        assert!(render_page(&page, &RenderOptions::default())
+            .expect("rendered page")
+            .contains("<h1>CRLF</h1>"));
     }
 
     #[test]
@@ -936,18 +1034,19 @@ hydrate: /static/test.js
             "<lode-pagelet><nostr-sync-pillow slug=\"x\"></nostr-sync-pillow><lode-scripture src=\"/x.js\"></lode-scripture></lode-pagelet>",
         )
         .expect("valid page");
-        let rendered = render_page(&page);
+        let rendered = render_page(&page, &RenderOptions::default()).expect("rendered page");
 
         assert!(rendered.contains("<lode-pagelet>"));
         assert!(rendered.contains("<nostr-sync-pillow slug=\"x\"></nostr-sync-pillow>"));
         assert!(rendered.contains("<lode-scripture src=\"/x.js\"></lode-scripture>"));
-        assert!(!rendered.contains("data-lodestone-component=\"nostr-sync-pill\""));
     }
 
     #[test]
     fn manifest_is_structured_json_with_escaped_values() {
         let page =
-            parse_stone_page("---\ntitle: \"A \\\"quoted\\\" page\"\nsummary: line one\n---\n")
+            parse_stone_page(
+                "---\ntitle: \"A \\\"quoted\\\" page\"\nsummary: line one\n---\n<lode-page><demo-card></demo-card></lode-page>\n",
+            )
                 .expect("valid page");
         let manifest: Value =
             serde_json::from_str(&manifest_json("odd path/\"page\".stone.html", &page))
@@ -956,6 +1055,7 @@ hydrate: /static/test.js
         assert_eq!(manifest["source"], "odd path/\"page\".stone.html");
         assert_eq!(manifest["page"]["title"], "A \\\"quoted\\\" page");
         assert_eq!(manifest["page"]["summary"], "line one");
+        assert_eq!(manifest["components"], json!(["demo-card", "lode-page"]));
     }
 
     #[test]
@@ -964,6 +1064,7 @@ hydrate: /static/test.js
         let error = apply_overrides(
             &mut page,
             &[String::from("--set"), String::from("bad/key=value")],
+            &mut RenderOptions::default(),
         )
         .expect_err("invalid key rejected");
 
@@ -971,7 +1072,8 @@ hydrate: /static/test.js
     }
 
     fn rendered_output_matches(page: &StonePage, expected: &str) -> bool {
-        normalize_html(&render_page(page)) == normalize_html(expected)
+        normalize_html(&render_page(page, &RenderOptions::default()).expect("rendered page"))
+            == normalize_html(expected)
     }
 
     fn unique_test_dir(prefix: &str) -> PathBuf {
@@ -980,5 +1082,15 @@ hydrate: /static/test.js
             .expect("time")
             .as_nanos();
         env::temp_dir().join(format!("{prefix}-{}-{nanos}", process::id()))
+    }
+
+    fn make_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(path).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).expect("chmod");
+        }
     }
 }
